@@ -1,0 +1,14 @@
+.env
+/hermes-mcp
+/hermes-mcp.exe
+/hermes-mcp.exe~
+
+# Archivos que escribe "reporting" (guardarEnArchivo=true) -- pueden
+# contener datos reales de clientes una vez conectado a UAT/Mongo real.
+# Nunca van al repo.
+/generatedfiles/
+/salidas/
+
+# Config de Mongo local para desarrollo -- no hace falta en el repo, cada
+# quien levanta su propio Mongo local siguiendo el README.
+docker-compose.yml
