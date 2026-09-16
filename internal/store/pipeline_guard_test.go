@@ -88,6 +88,23 @@ func TestValidatePipeline_LookupHaciaColeccionPermitida_OK(t *testing.T) {
 	}
 }
 
+func TestValidatePipeline_LookupHaciaOperativeLevel_OK(t *testing.T) {
+	// operativeLevel es el catalogo auxiliar de clase/subclase de punto
+	// (ver la nota fechada 2026-09-15 en pipeline_guard.go) -- NO es una de
+	// las 6 entidades tipo cuenta, pero se habilito explicitamente como
+	// destino de $lookup de solo lectura.
+	pipeline := []map[string]interface{}{
+		{"$lookup": map[string]interface{}{
+			"from":     "operativeLevel",
+			"pipeline": []interface{}{},
+			"as":       "clases",
+		}},
+	}
+	if err := store.ValidatePipeline(pipeline); err != nil {
+		t.Errorf("no se esperaba error para un $lookup hacia operativeLevel: %v", err)
+	}
+}
+
 func TestValidatePipeline_LookupHaciaColeccionFueraDeAlcance_Rechazado(t *testing.T) {
 	// Este es el caso que motivo agregar validarColeccionDestino: sin esta
 	// regla, un pipeline podia empezar en una coleccion del alcance

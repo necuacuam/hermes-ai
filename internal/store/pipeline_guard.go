@@ -38,7 +38,18 @@
 // nombres de etapa/operador, nunca el VALOR de "from". Se agrega
 // validarColeccionDestino para cerrar ese agujero: todo "from" de $lookup/
 // $graphLookup tiene que ser una de las 6 colecciones conocidas
-// (domain.CollectionName).
+// (domain.CollectionName) o una de las colecciones auxiliares agregadas
+// explicitamente (ver coleccionesAuxiliaresPermitidas).
+//
+// EXCEPCION PUNTUAL (2026-09-15, decision de TAvo): se habilita "from":
+// "operativeLevel" -- el catalogo auxiliar de clase/subclase de punto
+// (ver dictionary.go, FieldInfo de punto, y grafo-entidades-hermes.md).
+// NO se la agrega a domain.CollectionName/EntityType a proposito: sigue
+// sin ser una entidad tipo cuenta, no tiene ucode/parentUCode, y NO puede
+// usarse como coleccionInicial de un pipeline (eso la convertiria en una
+// 7ma entidad completa, que es justo lo que se decidio no hacer) -- solo
+// se permite como destino de un $lookup/$graphLookup de solo lectura
+// desde alguna de las 6 colecciones reales, tipicamente servicePoint.
 package store
 
 import (
@@ -47,13 +58,25 @@ import (
 	"hermes-mcp/internal/domain"
 )
 
+// coleccionesAuxiliaresPermitidas son colecciones que NO son entidades tipo
+// cuenta (no tienen ucode/parentUCode, no pueden ser coleccionInicial) pero
+// que se permite consultar como destino de un $lookup/$graphLookup de solo
+// lectura -- catalogos de referencia externos al grafo de las 6 entidades.
+// Ver la nota fechada 2026-09-15 en el comentario del paquete.
+var coleccionesAuxiliaresPermitidas = map[string]bool{
+	"operativeLevel": true,
+}
+
 // coleccionesPermitidas son los unicos nombres de coleccion Mongo a los que
-// un pipeline puede referirse (coleccionInicial o "from" de $lookup/
-// $graphLookup) -- exactamente las 6 entidades tipo cuenta del alcance de
-// esta v1, ni una mas.
+// un pipeline puede referirse como "from" de $lookup/$graphLookup --
+// las 6 entidades tipo cuenta del alcance de esta v1 mas las colecciones
+// auxiliares agregadas explicitamente (hoy, solo operativeLevel).
 var coleccionesPermitidas = func() map[string]bool {
 	m := map[string]bool{}
 	for _, coll := range domain.CollectionName {
+		m[coll] = true
+	}
+	for coll := range coleccionesAuxiliaresPermitidas {
 		m[coll] = true
 	}
 	return m
@@ -151,7 +174,7 @@ func validarColeccionDestino(stageBody interface{}) error {
 		return nil
 	}
 	if !coleccionesPermitidas[fromStr] {
-		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las 6 entidades tipo cuenta (serviceHolding, serviceGroup, serviceEntity, servicePlace, servicePoint, serviceAddress)", fromStr)
+		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las 6 entidades tipo cuenta (serviceHolding, serviceGroup, serviceEntity, servicePlace, servicePoint, serviceAddress) o hacia una coleccion auxiliar habilitada explicitamente (operativeLevel)", fromStr)
 	}
 	return nil
 }

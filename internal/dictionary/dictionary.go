@@ -52,6 +52,24 @@ package dictionary
 
 import "hermes-mcp/internal/domain"
 
+// BUG REAL CORREGIDO (2026-09-15, incidente en vivo con TAvo): la primera
+// version de la entrada de itemClass/itemSubClass de punto metia TODA la
+// narrativa de investigacion (que se encontro en un chat de Teams, la
+// comparacion BR/CL con citas textuales, "confirmado por busqueda
+// completa en el repo") directo en Descripcion -- y Descripcion es
+// exactamente lo que el agente en produccion repite para explicarle el
+// mecanismo al usuario. La regla dura del prompt ("el campo fuente es
+// interno, nunca se menciona") no alcanzaba a proteger esto porque la
+// fuga no estaba en Fuente, estaba en Descripcion. El usuario vio al
+// agente citando "hallado en un chat de Teams" y con razon penso que
+// habia usado una fuente externa no autorizada -- el agente solo repitio
+// lo que esta tool le devolvio.
+//
+// Regla para toda entrada nueva de aca en mas: Descripcion es 100% lo
+// que el agente puede decirle al usuario (mecanismo, limitaciones,
+// tabla de codigos) -- CERO narrativa de "como llegamos a esto"
+// (Excel/codigo/chat/comparaciones hechas a mano, citas de investigacion).
+// Toda esa procedencia va en Fuente, y solo en Fuente.
 type FieldInfo struct {
 	Campo       string `json:"campo"`
 	Descripcion string `json:"descripcion"`
@@ -122,6 +140,7 @@ var fieldsByType = map[domain.EntityType][]FieldInfo{
 		{"data.segmentCode / data.segmentName / data.subsegmentCode / data.subsegmentName", "Rubro/sector de negocio del punto. Mismo campo, presente en las 5 entidades de la cadena (ver nota en cliente).", "Excel EntidadesOTC.xlsx, hoja AccountData + confirmado contra UAT"},
 		{"data.addressCode", "FK real hacia el ucode de un documento de 'direccion' (serviceAddress) -- ver nota completa en cliente.", "Excel EntidadesOTC.xlsx, hoja AccountData ('Lookup a traves de account.pro_direccioncentro') + codigo fuente Hermes (on-merge-step-2-generate.go)"},
 		{"data.customerId", "CUIDADO, comportamiento distinto al resto de la cadena: en punto este campo es una FK real que apunta directo al ucode del CLIENTE (dos niveles arriba, saltandose el centro) -- no al centro padre inmediato. Confirmado en codigo (on-merge-step-1-plan.go recalcula este campo como el ucode del abuelo) y en datos de seed. Util para llegar al cliente sin pasar por parentUCode+parentUCode.", "código fuente Hermes (modules/entity/merge/on-merge-step-1-plan.go) + datos de seed -- NO esta documentado como FK en el Excel"},
+		{"data.additionalFields.itemClass (nombre de negocio: 'clase de punto') / data.additionalFields.itemSubClass (nombre de negocio: 'subclase')", "NO confundir con data.pointOfServiceType ('tipo de punto', otro campo distinto, sin tabla de significado) -- itemClass/itemSubClass son dos NIVELES de una clasificacion jerarquica del EQUIPO instalado en el punto (ej. clase='Extintores', subclase='PÓ QUÍMICO ABC'), consultable con solo la clase o con clase+subclase. NO son una FK hacia otra entidad -- son codigos de una TABLA AUXILIAR/CATALOGO externa a las 6 entidades de este servidor (coleccion Mongo 'operativeLevel', que NO tiene ucode/parentUCode ni participa del grafo de entidades: es una tabla de referencia, no una entidad). Esta relacion es EXCLUSIVA de punto -- ninguna otra entidad la usa. Estructura de 'operativeLevel': un documento por pais, con un array 'services' de elementos {productId, level1Code, level2Code, description} -- CADA ELEMENTO TIENE UN UNICO CAMPO 'description' de texto libre que ya trae el camino jerarquico concatenado (ej. 'Extintores → PÓ QUÍMICO ABC'), NO hay un campo de descripcion separado por nivel. El cruce se arma con un $lookup de solo lectura desde 'punto' hacia 'operativeLevel'. SIEMPRE se consulta el documento {country: 'CL'} de 'operativeLevel', sin importar el pais real del punto -- no hay logica de 'usar el pais del punto y caer a CL si falta', es CL siempre y en todos los casos; por eso la descripcion puede aparecer en un idioma distinto al del punto. El mismo par clase+subclase se repite en el catalogo bajo distintos 'productId' (mantenimiento correctivo, preventivo, instalacion, gestion de obras) -- agrupar por clase+subclase antes de mostrar resultados, no presentar esos duplicados como filas distintas. El catalogo de CL no tiene todas las clases/subclases que aparecen pobladas en puntos reales de otros paises -- puede faltar la traduccion de una CLASE ENTERA, no solo de una subclase puntual; no inventar el significado en ese caso, avisar que no hay traduccion disponible. Tabla de referencia (level1Code -> clase), confirmada contra el catalogo real: PO00001=Deteccion automatica de incendios, PO00003=Deteccion de gases, PO00007=Extintores, PO00008=Sistemas automaticos de extincion por agua (sprinklers y diluvio), PO00009=Sistemas de extincion por gases, PO00015=Carretes/mangueras de incendio, PO00025=Control de accesos, PO00089=Sistemas automaticos de extincion por espuma, PO00090=Hidrantes y bocas de incendio, PO00093=Sistemas automaticos de extincion para campanas de cocina, PO00094=Centrales de bombeo / abastecimiento de agua contraincendios, PO00620=Equipos de respiracion autonoma (ARICA), PO00627=Duchas lavaojos, PO00629=General/sin categoria especifica. NO resueltos contra el catalogo de CL (no inventar su significado): itemClass='PI00001', itemClass='PR00006', itemSubClass='POO0170' (bajo itemClass=PO00007), y en general cualquier subclase de otros paises que el catalogo de CL no tenga cargada.", "código fuente Hermes (support-otc-hermes-hms-master/modules/reference/handler.go, GetOperativeLevelList) + colección Mongo operativeLevel (bulk BR/CL cargado a mano en hermes-local) + confirmado por búsqueda completa en el repo de Hermes que ningún otro módulo de entidad usa itemClass/additionalFields, y que operativeLevel/OperativeLevelCollection no se referencia fuera de modules/reference y su test e2e -- NO está documentado en el Excel EntidadesOTC. Comparación BR vs CL (hecha a mano sobre el bulk) confirma que el mismo level1Code+level2Code trae una traducción literal entre los dos idiomas (ej. POO0176/177/178 bajo PO00001: 'Sistema de Detecção de Incêndio/Sistema Aspirador/Sirenes' en BR vs 'Sistema Detección/Sistema Aspiración/Sirenas' en CL) -- de ahí la confianza en usar un solo país como referencia. El uso fijo de CL (sin importar el país del punto) es decisión propia, no está en el código de Hermes -- se sostiene porque CL trae una fila general con level2Code vacío por cada clase que Brasil no tiene, lo que permite resolver una búsqueda por clase sola. itemclass.txt (volcado 2023, Portugal, hallado en un chat de Teams) se usó solo como evidencia de investigación para armar la tabla de arriba -- NO se usa como fuente de traducción en tiempo de ejecución porque no siempre coincide con la numeración viva del bulk BR/CL (ej. PO00025/POO0125 difiere entre ambas fuentes). ESTE CAMPO 'fuente' ES METADATA INTERNA DE MANTENIMIENTO -- nunca repetirlo ni parafrasearlo al usuario (ver regla dura del prompt)."},
 	},
 	domain.Grupo: {
 		{"ucode", "Identificador unico del grupo (formato: pais + '01' + 8 digitos). Nivel raiz, no bajo 'data'.", "código + confirmado contra UAT"},
@@ -185,6 +204,7 @@ type HierarchyInfo struct {
 	EstructuraDeCampos  string                        `json:"estructuraDeCampos"` // donde viven los campos de negocio -- ver comentario del campo mas abajo
 	Direccion           string                        `json:"direccion"`          // nota aparte sobre por que "direccion" no encaja en la cadena de ParentUCode
 	OtrasRelaciones     string                        `json:"otrasRelaciones"`    // FKs cross-entidad que NO son ucode/parentUCode -- ver Hierarchy()
+	OrigenDatos         string                        `json:"origenDatos"`        // de que base/entorno viene lo conectado AHORA -- ver Hierarchy() y HERMES_MCP_ORIGEN_DATOS
 	Anidamiento         struct {
 		SegunCodigoHermes           string `json:"segunCodigoHermes"`
 		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
@@ -192,18 +212,38 @@ type HierarchyInfo struct {
 	} `json:"anidamiento"`
 }
 
-// Hierarchy devuelve la relacion estructural entre los tipos. No recibe
-// parametros porque, a diferencia de Lookup, no tiene sentido "filtrar por
-// tipo" -- la jerarquia es una sola cosa completa.
-func Hierarchy() HierarchyInfo {
+// origenDatosNoConfigurado es lo que se devuelve en OrigenDatos cuando
+// HERMES_MCP_ORIGEN_DATOS no esta seteada. No es un texto neutro cualquiera
+// -- lleva la instruccion adentro a proposito (ver nota de TAvo 2026-09-16:
+// un agente en vivo califico datos de prueba como "de esta restauracion
+// UAT" solo porque el prompt tecnico lo decia como hecho fijo, cuando en
+// realidad era una foto de un momento y ni siquiera del UAT completo, sino
+// de un subconjunto). Poniendo la regla ACA, sobrevive aunque el prompt se
+// desactualice o cambie: el agente la ve fresca en cada llamada a
+// relacion_entre_entidades, no depende de que la recuerde de la
+// conversacion o de texto estatico en su system prompt.
+const origenDatosNoConfigurado = "No configurado en el servidor (HERMES_MCP_ORIGEN_DATOS vacia). NO asumas ni nombres un entorno (UAT, dev, QA, produccion, etc.) por conocimiento previo, por lo que diga cualquier prompt, o por lo que se haya dicho en otra conversacion -- ese dato no esta confirmado. Si hace falta comentar que unos valores parecen de prueba (placeholders, seriales repetidos, etc.), decilo en esos terminos genericos, sin nombrar un origen especifico."
+
+// Hierarchy devuelve la relacion estructural entre los tipos, mas de que
+// base/entorno viene lo que esta conectado ahora mismo (origenDatos, tal
+// cual lo configuro quien corre el servidor -- ver HERMES_MCP_ORIGEN_DATOS
+// en main.go). Ese dato SI depende de la config de cada corrida, a
+// diferencia de todo lo demas en este struct -- por eso es el unico
+// parametro que recibe.
+func Hierarchy(origenDatos string) HierarchyInfo {
+	origen := origenDatos
+	if origen == "" {
+		origen = origenDatosNoConfigurado
+	}
 	info := HierarchyInfo{
 		Jerarquia:           domain.AllTypes,
 		PrefijosUCode:       domain.MDMPrefix,
 		ColeccionMongo:      domain.CollectionName,
+		OrigenDatos:         origen,
 		MecanismoDeRelacion: "Cada documento tiene un unico campo generico ParentUCode que apunta al ucode de su padre -- no hay una tabla de relaciones separada ni un campo distinto por tipo de padre. Para armar un $lookup en un pipeline, usar los nombres de 'coleccionMongo' como 'from' y 'parentUCode'/'ucode' como campos de join.",
 		EstructuraDeCampos:  "ucode y parentUCode viven a NIVEL RAIZ del documento. Todo lo demas (nombres de negocio, NIF, tipo, ubicacion, etc.) vive ANIDADO bajo un campo 'data' -- un $match tiene que usar 'data.accountName', no 'accountName' a secas, o no va a matchear nada (asi es como esta documentado cada campo en diccionario_de_campos, con el prefijo 'data.' ya incluido en el nombre). Unica excepcion: 'direccion' no tiene ningun campo de nombre de negocio bajo 'data', solo componentes de domicilio.",
 		Direccion:           "'direccion' (serviceAddress) esta incluida en el alcance por pedido explicito, pero no participa de la cadena holding->grupo->cliente->centro->punto: en el esquema de ucode MDM 'apunta a si misma', sin padre real. CONFIRMADO CONTRA UAT: el documento de 'direccion' ni siquiera tiene un campo 'parentUCode' (ni vacio ni poblado) -- a diferencia de las otras 5, que si lo tienen. No asumir un ParentUCode util para traversal -- si un pipeline necesita relacionar una direccion con otra entidad, buscar el campo de vinculo real en 'diccionario_de_campos' o preguntar, no asumir ParentUCode por analogia con las otras 5.",
-		OtrasRelaciones:     "Ademas de ucode/parentUCode existen otros campos que funcionan como FK real hacia otra coleccion (o hacia la misma), confirmados contra codigo fuente y/o Excel: (1) data.addressCode (en cliente/centro/punto) apunta al ucode de un documento de 'direccion' -- es como se llega de cliente/centro/punto a serviceAddress, ya que direccion no tiene parentUCode; relacion opcional, puede estar vacio o no resolver. (2) data.customerGroupCode apunta al ucode de un 'grupo' real (serviceGroup), y data.customerHoldingCode al ucode de un 'holding' real (serviceHolding) -- son atajos denormalizados equivalentes a subir por parentUCode dos o tres niveles, no un camino distinto. (3) data.customerId en 'punto' es un caso especial: apunta directo al ucode del CLIENTE (dos niveles arriba, saltando el centro) en vez de al padre inmediato -- ver diccionario_de_campos de punto para el detalle. (4) data.mergedMainCenter en 'centro' es una autoreferencia centro->centro tras fusiones, con formato de ucode valido pero sin uso de lookup confirmado en el codigo -- tratarlo como informativo. Ver diccionario_de_campos de cada tipo para el detalle y la fuente de cada uno.",
+		OtrasRelaciones:     "Ademas de ucode/parentUCode existen otros campos que funcionan como FK real hacia otra coleccion (o hacia la misma), confirmados contra codigo fuente y/o Excel: (1) data.addressCode (en cliente/centro/punto) apunta al ucode de un documento de 'direccion' -- es como se llega de cliente/centro/punto a serviceAddress, ya que direccion no tiene parentUCode; relacion opcional, puede estar vacio o no resolver. (2) data.customerGroupCode apunta al ucode de un 'grupo' real (serviceGroup), y data.customerHoldingCode al ucode de un 'holding' real (serviceHolding) -- son atajos denormalizados equivalentes a subir por parentUCode dos o tres niveles, no un camino distinto. (3) data.customerId en 'punto' es un caso especial: apunta directo al ucode del CLIENTE (dos niveles arriba, saltando el centro) en vez de al padre inmediato -- ver diccionario_de_campos de punto para el detalle. (4) data.mergedMainCenter en 'centro' es una autoreferencia centro->centro tras fusiones, con formato de ucode valido pero sin uso de lookup confirmado en el codigo -- tratarlo como informativo. Ver diccionario_de_campos de cada tipo para el detalle y la fuente de cada uno. APARTE de estas 4 (todas FK entre las 6 entidades), data.additionalFields.itemClass/itemSubClass ('clase'/'subclase' de punto, solo en 'punto', confirmado que ninguna otra entidad lo usa) se resuelve contra 'operativeLevel', que NO es una entidad sino una TABLA AUXILIAR/CATALOGO externa (sin ucode/parentUCode, fuera del grafo). El cruce es por valor (SIEMPRE contra el documento {country:'CL'} de 'operativeLevel', sin mirar el pais real del punto -- decision propia), muchos-a-uno, sin lookup real en el backend de Hermes. Ver diccionario_de_campos de punto para el mecanismo completo, la tabla de codigos, y las limitaciones de cobertura de subclase.",
 	}
 	info.Anidamiento.SegunCodigoHermes = "handle-create-code.go valida y rechaza que un centro dependa de otro centro, o que un punto dependa de otro punto -- un centro siempre cuelga de un cliente, un punto siempre cuelga de un centro."
 	info.Anidamiento.SegunDocumentacionDeNegocio = "La Norma General 3P (Entidades de la Cuenta de Cliente) describe el anidamiento centro-en-centro y punto-en-punto como funcionalidad prevista, con ejemplos concretos (ej. el Bernabeu subdividido en zonas-centro, un rack con paneles como puntos hijos)."
