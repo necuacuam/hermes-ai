@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"strings"
 	"testing"
 
 	"hermes-mcp/internal/store"
@@ -14,7 +15,7 @@ import (
 
 func TestValidatePipeline_EtapaDeLecturaPermitida(t *testing.T) {
 	pipeline := []map[string]interface{}{
-		{"$match": map[string]interface{}{"name": "Banco Santander"}},
+		{"$match": map[string]interface{}{"data.customerName": "Banco Santander"}},
 		{"$limit": 5},
 	}
 	if err := store.ValidatePipeline(pipeline); err != nil {
@@ -56,6 +57,35 @@ func TestValidatePipeline_OperadorProhibidoAnidado_Rechazado(t *testing.T) {
 	}
 	if err := store.ValidatePipeline(pipeline); err == nil {
 		t.Error("se esperaba error -- $where anidado dentro de $match tiene que rechazarse")
+	}
+}
+
+func TestValidatePipeline_ClaveDeOperadorConEspacioAntesDelSimbolo_Rechazada(t *testing.T) {
+	// Bug real observado en produccion (2026-09-25): el subagente arma
+	// {"$exists": true} pero con un espacio de mas antes del "$" --
+	// {" $exists": true}. Mongo NO tira error para esto: lo trata como un
+	// nombre de campo literal, y el $match deja de matchear nada (0
+	// resultados en silencio). ValidatePipeline tiene que atajarlo antes de
+	// ejecutar, con un mensaje que ayude a corregirlo.
+	pipeline := []map[string]interface{}{
+		{"$match": map[string]interface{}{"parentUCode": map[string]interface{}{" $exists": true}}},
+	}
+	err := store.ValidatePipeline(pipeline)
+	if err == nil {
+		t.Fatal("se esperaba error -- clave ' $exists' (con espacio) tiene que rechazarse")
+	}
+	if !strings.Contains(err.Error(), "$exists") {
+		t.Errorf("el mensaje de error deberia mencionar la clave real \"$exists\", quedo: %v", err)
+	}
+}
+
+func TestValidatePipeline_ClaveDeOperadorSinEspacio_OK(t *testing.T) {
+	// Caso negativo: el mismo operador bien escrito no debe dispararlo.
+	pipeline := []map[string]interface{}{
+		{"$match": map[string]interface{}{"parentUCode": map[string]interface{}{"$exists": true}}},
+	}
+	if err := store.ValidatePipeline(pipeline); err != nil {
+		t.Errorf("no se esperaba error para \"$exists\" bien formado: %v", err)
 	}
 }
 

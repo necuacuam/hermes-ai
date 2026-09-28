@@ -3,6 +3,19 @@
 /hermes-mcp.exe
 /hermes-mcp.exe~
 
+# Carpeta generada por scripts\build-linux.ps1 -- lleva un binario Linux,
+# un .env y un fichero de relaciones reales, mismo tratamiento que los de
+# arriba: nunca al repo.
+/dist-linux/
+
+# Ficheros de relaciones reales (contienen origenDatos, especifico de cada
+# maquina/entorno -- mismo tratamiento que .env). Pueden ser varios (uno
+# por entorno/release, ver HERMES_MCP_RELACIONES_PATH). Los que terminan en
+# ".example.json" SI se versionan -- son las plantillas, con origenDatos en
+# blanco.
+relaciones/*.json
+!relaciones/*.example.json
+
 # Archivos que escribe "reporting" (guardarEnArchivo=true) -- pueden
 # contener datos reales de clientes una vez conectado a UAT/Mongo real.
 # Nunca van al repo.

@@ -30,11 +30,16 @@ escribir (ver `internal/store/pipeline_guard.go`).
 ## Tools
 
 - **`diccionario_de_campos`**: traduce nombre de negocio ↔ campo técnico
-  Mongo, por tipo de entidad. Estática (hardcodeada en
-  `internal/dictionary`), no toca Mongo.
+  Mongo, por tipo de entidad. Estática (no toca Mongo) -- el contenido
+  completo (todos los campos que persisten de verdad en Mongo por tipo, no
+  un subconjunto) se carga desde un fichero externo (`relaciones/`, ver más
+  abajo, campo `campos`) en vez de vivir hardcodeado en `internal/dictionary`.
 - **`relacion_entre_entidades`**: jerarquía de tipos, prefijos de ucode,
   nombre real de cada colección Mongo y el mecanismo de `parentUCode`.
-  También estática.
+  También estática (no toca Mongo) -- jerarquía/prefijos/colecciones siguen
+  fijos en código (`internal/domain`), pero el mecanismo de relación, las
+  notas de negocio y `origenDatos` se cargan desde el mismo fichero externo
+  (`relaciones/`, ver más abajo) en vez de vivir hardcodeados en Go.
 - **`seek`**: busca entidades reales por nombre aproximado sin asumir tipo.
   Diagnóstico posterior a un resultado inesperado, no un paso obligatorio.
 - **`reporting`**: ejecuta un pipeline de agregación ya armado (modo
@@ -74,27 +79,30 @@ está en el paso 6 de "Configurar Claude Desktop" más abajo.
 
 ## Variables de entorno
 
-**Un solo lugar para todo: `.env`, al lado de `hermes-mcp.exe`.** Copiar
-`.env.example` a `.env` y completar ahí -- lo lee el binario mismo (ver
-`loadDotEnv` en `main.go`), sea cual sea la forma de arrancarlo (Claude
-Desktop, `go run`, los scripts de `scripts\`). No hace falta nada en el
-bloque `env` de `claude_desktop_config.json` salvo que se quiera pisar
-puntualmente un valor desde ahí para una instalación en particular (una
-variable ya seteada en el entorno real siempre gana sobre `.env`). Si
-estás depurando qué está conectado de verdad, `.env` es la respuesta
-completa -- no hace falta mirar `claude_desktop_config.json` para nada
-salvo overrides puntuales. `HERMES_MCP_MONGO_URI` no tiene ningún default
-embebido en el código: si no está en `.env` ni en el entorno real, el
-servidor no arranca.
+**Dos lugares, cada uno con un rol fijo -- no son intercambiables:**
 
-| Variable | Para qué | Default |
-|---|---|---|
-| `HERMES_MCP_MONGO_URI` | Conexión a Mongo. Vacío explícito fuerza `mockstore` (sin pipelines). | **ninguno -- obligatoria** (sin ella, o sin este archivo, el servidor no arranca) |
-| `HERMES_MCP_MONGO_DB` | Base a usar. | `hermes-local` |
-| `HERMES_MCP_ORIGEN_DATOS` | **Actualizar siempre junto con las dos de arriba.** Texto libre: de qué base/entorno viene lo conectado ahora (ej. `"subconjunto restaurado de UAT, sept. 2026"`, o `"producción"` si algún día se apunta ahí). Lo expone `relacion_entre_entidades` (`origenDatos`) para que el agente nunca tenga que asumir un entorno de memoria o de un prompt desactualizado -- ver sección más abajo. | vacío (el agente recibe una instrucción explícita de no adivinar el entorno) |
-| `HERMES_MCP_SALIDAS_DIR` | Carpeta de salida de `reporting` (`guardarEnArchivo=true`). | `./salidas` |
-| `HERMES_MCP_LIMITE_PANTALLA_DEFAULT` | Filas máximas en pantalla si no se especifica. | `10` |
-| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por pipeline. | `30s` |
+- **`.env`**, al lado de `hermes-mcp.exe`: la config de conexión, compartida
+  sea cual sea la forma de arrancar el servidor (Claude Desktop, `go run`,
+  los scripts de `scripts\`) -- Mongo, carpeta de salidas, topes de
+  recursos. Copiar `.env.example` a `.env` y completar ahí (lo lee el
+  binario mismo, ver `loadDotEnv` en `main.go`). `HERMES_MCP_MONGO_URI` no
+  tiene ningún default embebido en el código: si no está en `.env` ni en
+  el entorno real, el servidor no arranca.
+- **Bloque `env` de `claude_desktop_config.json`**: el único lugar de
+  `HERMES_MCP_RELACIONES_PATH`. No es un override puntual de algo que
+  también podría ir en `.env` -- es la variable que dice qué fichero de
+  relaciones usa ESTA instalación de Claude Desktop, así que vive en la
+  config de esa instalación, no en un `.env` que podría terminar
+  compartido entre varias. Ver "Configurar Claude Desktop" más abajo.
+
+| Variable | Para qué | Dónde se configura | Default |
+|---|---|---|---|
+| `HERMES_MCP_MONGO_URI` | Conexión a Mongo. Vacío explícito fuerza `mockstore` (sin pipelines). | `.env` | **ninguno -- obligatoria** (sin ella, o sin este archivo, el servidor no arranca) |
+| `HERMES_MCP_MONGO_DB` | Base a usar. | `.env` | `hermes-local` |
+| `HERMES_MCP_RELACIONES_PATH` | Ruta al fichero de relaciones a cargar (dentro de `relaciones/`) -- ahí vive tanto la estructura de `relacion_entre_entidades` como `origenDatos` (de qué base/entorno viene lo conectado ahora). Ver sección más abajo. | **bloque `env` de `claude_desktop_config.json`** (no `.env`) | **ninguno -- obligatoria** (sin ella, o sin el fichero, el servidor no arranca) |
+| `HERMES_MCP_SALIDAS_DIR` | Carpeta de salida de `reporting` (`guardarEnArchivo=true`). | `.env` | `./salidas` |
+| `HERMES_MCP_LIMITE_PANTALLA_DEFAULT` | Filas máximas en pantalla si no se especifica. | `.env` | `10` |
+| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por pipeline. | `.env` | `30s` |
 
 ## Cómo correrlo
 
@@ -112,12 +120,22 @@ Claude Desktop no corre `go run` -- necesita el **binario ya compilado**
 registrado como servidor MCP local. Son dos archivos de configuración,
 cada uno con un rol distinto y sin superposición entre sí:
 
-- **`.env`** (al lado de `hermes-mcp.exe`, nunca se versiona): TODA la
-  configuración real -- Mongo, origen de datos, carpeta de salidas,
-  topes de recursos. Es el único lugar que hace falta mirar para saber
-  qué está conectado.
-- **`claude_desktop_config.json`**: solo le dice a Claude Desktop qué
-  binario levantar. No necesita bloque `env` en el uso normal.
+- **`.env`** (al lado de `hermes-mcp.exe`, nunca se versiona): la config de
+  conexión -- Mongo, carpeta de salidas, topes de recursos.
+- **`relaciones/relaciones.json`** (carpeta al lado de `hermes-mcp.exe`;
+  los `.json` reales nunca se versionan -- copiar desde
+  `relaciones/relaciones.example.json` y completar `origenDatos`): la
+  estructura de `relacion_entre_entidades` más de qué base/entorno viene
+  lo conectado, Y (desde 2026-09-20) el contenido completo de
+  `diccionario_de_campos` (clave `campos`, un array de `{campo,
+  descripcion, fuente}` por tipo de entidad). Puede haber varios ficheros
+  en esa carpeta (uno por entorno/release) -- `HERMES_MCP_RELACIONES_PATH`
+  dice cuál usar.
+- **`claude_desktop_config.json`**: le dice a Claude Desktop qué binario
+  levantar, Y trae el bloque `env` con `HERMES_MCP_RELACIONES_PATH` --
+  esta variable NO va en `.env`. Es la config de ESTA instalación de
+  Claude Desktop, así que su lugar natural es la config de esa
+  instalación, no un `.env` compartido. Ver paso 3 más abajo.
 
 Pasos:
 
@@ -132,42 +150,47 @@ Pasos:
    ```
    HERMES_MCP_MONGO_URI=mongodb://hermes:cambiame-antes-de-exponer@localhost:27017/?authSource=admin
    HERMES_MCP_MONGO_DB=hermes-local
-   HERMES_MCP_ORIGEN_DATOS=subconjunto restaurado de UAT, sept. 2026
    HERMES_MCP_SALIDAS_DIR=C:\ruta\completa\a\mcp-server\generatedfiles
    ```
 
-   **Actualizar siempre `HERMES_MCP_ORIGEN_DATOS` junto con
-   `HERMES_MCP_MONGO_URI`, en este mismo archivo, en el mismo momento**
-   (ver sección más abajo de por qué). `HERMES_MCP_SALIDAS_DIR` puede ser
-   relativa (`./generatedfiles`, resuelta contra el directorio de trabajo
-   con el que arranque el proceso) o absoluta -- absoluta es más segura
-   si no se sabe con qué cwd va a lanzar Claude Desktop al binario.
+   `HERMES_MCP_RELACIONES_PATH` **no va en `.env`** -- se configura en el
+   paso 3, dentro de `claude_desktop_config.json`. `HERMES_MCP_SALIDAS_DIR`
+   puede ser relativa (`./generatedfiles`, resuelta contra el directorio de
+   trabajo con el que arranque el proceso) o absoluta -- absoluta es más
+   segura si no se sabe con qué cwd va a lanzar Claude Desktop al binario.
+   Además, copiar `relaciones/relaciones.example.json` a un nombre dentro
+   de esa misma carpeta (ej. `relaciones/relaciones.json`) y completar
+   `origenDatos` -- **actualizar ese campo junto con `HERMES_MCP_MONGO_URI`
+   de arriba, en el mismo momento** (ver sección más abajo de por qué).
 3. Editar `claude_desktop_config.json` (menú Claude Desktop → Settings →
    Developer → Edit Config) y agregar una entrada bajo `mcpServers` con
-   **solo** `command`:
+   `command` y el bloque `env` con `HERMES_MCP_RELACIONES_PATH`:
 
    ```json
    {
      "mcpServers": {
        "hermes-mcp": {
-         "command": "C:\\ruta\\completa\\a\\mcp-server\\hermes-mcp.exe"
+         "command": "C:\\ruta\\completa\\a\\mcp-server\\hermes-mcp.exe",
+         "env": {
+           "HERMES_MCP_RELACIONES_PATH": "relaciones/relaciones.json"
+         }
        }
      }
    }
    ```
 
-   Ruta absoluta, no relativa. No hace falta ningún bloque `"env"` acá --
-   el binario ya lee `.env` solo. La única razón válida para agregar
-   `"env": {...}` en esta misma entrada es pisar puntualmente una
-   variable para ESTA instalación de Claude Desktop en particular sin
-   tocar el `.env` compartido (ej. dos instalaciones que comparten
-   carpeta pero apuntan a Mongos distintos) -- una variable seteada ahí
-   siempre gana sobre `.env`.
+   Ruta de `command` absoluta, no relativa. El bloque `env` con
+   `HERMES_MCP_RELACIONES_PATH` **es obligatorio acá, no un override
+   puntual** -- es la variable que dice qué fichero de relaciones usa esta
+   instalación de Claude Desktop en particular; sin ella el servidor no
+   arranca, igual que sin `HERMES_MCP_MONGO_URI` en `.env`. Puede ser
+   relativa (se busca primero contra el directorio de trabajo, después al
+   lado del ejecutable) o absoluta.
 4. Reiniciar Claude Desktop por completo (cerrar el proceso, no solo la
    ventana) para que levante el servidor. Cualquier recompilación
-   posterior del binario, o edición de `.env`, también requiere este
-   mismo reinicio completo -- Claude Desktop no re-lee ninguno de los dos
-   en caliente.
+   posterior del binario, o edición de `.env` o de `claude_desktop_config.json`,
+   también requiere este mismo reinicio completo -- Claude Desktop no
+   re-lee ninguno de los tres en caliente.
 5. Confirmar que conectó: en un chat nuevo con el MCP habilitado, pedir que
    liste los campos de una entidad (ej. "mostrame el diccionario de campos
    de cliente") y verificar que responde con datos, no con un error de
@@ -198,6 +221,7 @@ internal/dictionary/        diccionario de campos + jerarquía estática
 internal/reporting/          regla de salida (pantalla/archivo, streaming)
 internal/tools/               conecta las 4 tools MCP con la lógica de arriba
 prompts/                     system prompts del Agente Hermes (negocio y técnico)
+relaciones/                  ficheros de relaciones -- *.example.json versionados, el resto no
 seed/seed.js                 datos de prueba para un sandbox desde cero -- nunca contra la base real
 ```
 
@@ -214,9 +238,9 @@ consultable -- no puede ser `coleccionInicial` de un pipeline -- pero
 destino de `$lookup`/`$graphLookup` de solo lectura (ver
 `internal/store/pipeline_guard.go`, `coleccionesAuxiliaresPermitidas`),
 típicamente con un `$lookup` sin correlación desde `servicePoint`. El
-mecanismo y la tabla de códigos conocidos quedan además hardcodeados en
-`internal/dictionary` (ver el `FieldInfo` de `punto`) para cuando no haga
-falta ir a Mongo.
+mecanismo y la tabla de códigos conocidos quedan además documentados en el
+fichero de relaciones externo (`FieldInfo` de `punto`, ver `relaciones/`
+más abajo) para cuando no haga falta ir a Mongo.
 
 Decisión de negocio tomada en esta sesión: **siempre se usa el catálogo
 de Chile (`country: "CL"`) para traducir estos códigos, sin importar el
@@ -239,21 +263,27 @@ resuelva. Detalle completo en `Hermes AI/grafo-entidades-hermes.md`.
 ## De qué base/entorno vienen los datos (`origenDatos`)
 
 `relacion_entre_entidades` siempre incluye un campo `origenDatos` con lo que
-se haya configurado en `HERMES_MCP_ORIGEN_DATOS` -- texto libre, pensado
-para decir de qué base/entorno viene lo que está conectado *ahora mismo*
-(ej. `"subconjunto restaurado de UAT, sept. 2026"`). Si esa variable no
-está seteada, el campo trae una instrucción explícita en vez de quedar
+traiga el fichero de relaciones cargado (`HERMES_MCP_RELACIONES_PATH`, ver
+`relaciones/relaciones.example.json`) -- texto libre, pensado para decir de qué
+base/entorno viene lo que está conectado *ahora mismo* (ej.
+`"subconjunto restaurado de UAT, sept. 2026"`). Si ese campo viene vacío en
+el archivo, `origenDatos` trae una instrucción explícita en vez de quedar
 vacío: no asumir ni nombrar un entorno (UAT, dev, QA, producción) por
 conocimiento previo ni por texto fijo de un prompt.
 
-Esto se agregó (2026-09-16) después de un caso real: un agente en producción
-calificó datos de prueba obviamente falsos (`serialNumber` repetido, marcas
-tipo "QA-...") como "de esta restauración UAT", solo porque el prompt
-técnico lo daba por hecho fijo -- cuando en realidad era una foto de un
-momento (y ni siquiera del UAT completo, sino de un subconjunto). Si el
+Esto existe porque un agente puede terminar calificando datos de prueba
+obviamente falsos (`serialNumber` repetido, marcas tipo "QA-...") como "de
+producción" o "de UAT" simplemente porque un prompt lo da por hecho fijo,
+aunque en realidad sea una foto de un momento puntual y ni siquiera de la
+totalidad del entorno. Mantener `origenDatos` en el fichero de relaciones
+(no en el código ni en el prompt) permite actualizar un solo lugar cuando
+cambia el Mongo conectado, sin tener que recompilar ni redistribuir el
+binario -- útil sobre todo si hay más de una instancia corriendo (ej. una
+para Claude Desktop, otra detrás de un proxy MCP-to-OpenAPI). Si el
 servidor se apunta a otro Mongo (otro entorno, otro subconjunto), alcanza
-con cambiar esta variable -- no hace falta tocar ningún prompt ni ningún
-`.go` para que el agente deje de arrastrar una suposición vieja.
+con actualizar `origenDatos` en `relaciones/relaciones.json` -- no hace
+falta tocar ningún prompt ni ningún `.go` para que el agente deje de
+arrastrar una suposición vieja.
 
 ## Qué falta
 

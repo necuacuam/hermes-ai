@@ -3,12 +3,18 @@
 // localmente (laptop corporativo) contra el Mongo local ya cargado con los
 // datos reales que dio el jefe, y conectarse desde Claude Desktop.
 //
-// Configuracion: TODAS las variables HERMES_MCP_* se pueden setear en un
-// archivo ".env" al lado del ejecutable (ver loadDotEnv mas abajo) -- ese
-// es el lugar recomendado, sea cual sea la forma de arrancar el servidor
-// (Claude Desktop, "go run", los scripts de scripts\). Una variable ya
-// seteada en el entorno real (ej. en el bloque "env" de
-// claude_desktop_config.json) sigue pisando lo que diga ".env".
+// Configuracion: la mayoria de las variables HERMES_MCP_* (Mongo, salidas,
+// topes de recursos) se setean en un archivo ".env" al lado del ejecutable
+// (ver loadDotEnv mas abajo), sea cual sea la forma de arrancar el
+// servidor (Claude Desktop, "go run", los scripts de scripts\).
+//
+// HERMES_MCP_RELACIONES_PATH es la excepcion: su lugar es el bloque "env"
+// de claude_desktop_config.json, NO ".env" -- es la variable que dice cual
+// instalacion de Claude Desktop usa cual fichero de relaciones, asi que
+// vive en la config de esa instalacion particular, no en un ".env" que
+// podria terminar compartido entre varias. Para desarrollo local (go run,
+// scripts\run-hermes-mcp.cmd) sin pasar por Claude Desktop, setearla a
+// mano en la sesion de shell antes de arrancar.
 //
 // Backend de datos: usa Mongo real (internal/store/mongostore) -- ESA base
 // nunca se toca en escritura (ver internal/store.ValidatePipeline: solo se
@@ -26,6 +32,18 @@
 // tests de Go), setear HERMES_MCP_MONGO_URI a una cadena vacia
 // explicitamente (no simplemente omitirla -- omitirla es el error de
 // arriba, no mockstore).
+//
+// HERMES_MCP_RELACIONES_PATH tambien es OBLIGATORIA -- ruta al fichero de
+// relaciones a cargar, dentro de la carpeta relaciones/ (ver
+// internal/dictionary/dictionary.go, RelationsData/LoadRelations, y
+// relaciones/relaciones.example.json) -- puede haber varios ahi (uno por
+// entorno/release), esta variable dice cual usar. Trae tanto la
+// estructura/notas de negocio de "relacion_entre_entidades" como
+// origenDatos. Mismo motivo que MONGO_URI: sin esto no hay nada util que
+// devolver. A DIFERENCIA de MONGO_URI, esta NO se configura en ".env" --
+// va en el bloque "env" de claude_desktop_config.json (ver README.md),
+// porque es la variable que distingue una instalacion de Claude Desktop
+// de otra, no una config de conexion compartida.
 //
 // Transporte: siempre stdio (lo que Claude Desktop espera de un MCP local).
 // Hasta el 2026-09-10 este binario tambien podia servir por TCP en dos
@@ -45,6 +63,7 @@ import (
 	"strings"
 	"time"
 
+	"hermes-mcp/internal/dictionary"
 	"hermes-mcp/internal/graph"
 	"hermes-mcp/internal/mcp"
 	"hermes-mcp/internal/reporting"
@@ -71,9 +90,11 @@ const timeoutPorDefecto = 30 * time.Second
 // segun la variable, el default hardcodeado de mas abajo o el bloque "env"
 // de claude_desktop_config.json -- dos lugares distintos segun el caso,
 // justo la confusion que esto resuelve. Con este cambio, ".env" es UN
-// SOLO lugar valido para las 4 variables de conexion/origen (MONGO_URI,
-// MONGO_DB, ORIGEN_DATOS, SALIDAS_DIR) sea cual sea la forma de arrancar
-// el servidor.
+// SOLO lugar valido para las variables de conexion (MONGO_URI, MONGO_DB,
+// SALIDAS_DIR) sea cual sea la forma de arrancar el servidor.
+// HERMES_MCP_RELACIONES_PATH queda deliberadamente afuera de esta lista --
+// ver el comentario de mas arriba, en la cabecera del archivo, sobre por
+// que esa variable vive en claude_desktop_config.json y no aca.
 //
 // Busca ".env" en dos lugares (en ese orden, se queda con el primero que
 // encuentre por variable): el directorio de trabajo actual (cubre "go run"
@@ -88,6 +109,35 @@ const timeoutPorDefecto = 30 * time.Second
 // run-hermes-mcp.cmd): sin comillas, sin multilinea, "#" al inicio de
 // linea es comentario. Si ".env" no existe en ninguno de los dos lugares,
 // no es un error -- el servidor sigue con los defaults de siempre.
+
+// resolverRutaConfig busca "nombre" (tal como vino de una variable de
+// entorno, ej. HERMES_MCP_RELACIONES_PATH) con el mismo criterio que
+// loadDotEnv busca ".env": si es una ruta absoluta se usa tal cual; si es
+// relativa, se prueba primero contra el directorio de trabajo actual y
+// despues contra el directorio del propio ejecutable -- para que Claude
+// Desktop (que lanza el .exe con un cwd que no controlamos) igual lo
+// encuentre si vive al lado del binario. Si ninguno de los dos candidatos
+// existe, devuelve "nombre" tal cual (sin resolver) para que el error de
+// LoadRelations sea claro sobre que ruta probo.
+func resolverRutaConfig(nombre string) string {
+	if filepath.IsAbs(nombre) {
+		return nombre
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidato := filepath.Join(cwd, nombre)
+		if _, err := os.Stat(candidato); err == nil {
+			return candidato
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidato := filepath.Join(filepath.Dir(exe), nombre)
+		if _, err := os.Stat(candidato); err == nil {
+			return candidato
+		}
+	}
+	return nombre
+}
+
 func loadDotEnv(logger *log.Logger) {
 	var candidatos []string
 	if cwd, err := os.Getwd(); err == nil {
@@ -193,19 +243,31 @@ func main() {
 		}
 	}
 
-	// origenDatos es texto libre, decidido por quien levanta el servidor,
-	// para que el agente sepa de que base/entorno viene lo conectado AHORA
-	// (ej. "subconjunto restaurado de UAT, sept. 2026") sin tener que
-	// asumirlo de un texto fijo en el prompt -- eso fue justo el bug que
-	// motivo esto (ver dictionary.go, origenDatosNoConfigurado): un agente
-	// califico datos de prueba como "de esta restauracion UAT" solo porque
-	// el prompt lo decia como hecho fijo, cuando en realidad era una foto
-	// de un momento. Si no se setea, dictionary.Hierarchy ya devuelve un
-	// texto que le prohibe al agente adivinar el entorno.
-	origenDatos := os.Getenv("HERMES_MCP_ORIGEN_DATOS")
+	// HERMES_MCP_RELACIONES_PATH: ruta al fichero de relaciones a cargar,
+	// dentro de la carpeta relaciones/ -- ver dictionary.RelationsData/
+	// LoadRelations y relaciones/relaciones.example.json. Ahi vive tanto la estructura/notas de
+	// negocio de "relacion_entre_entidades" como origenDatos (texto libre,
+	// decidido por quien levanta el servidor, para que el agente sepa de
+	// que base/entorno viene lo conectado AHORA sin tener que asumirlo de
+	// un texto fijo en el prompt -- eso fue justo el bug que motivo esto,
+	// ver dictionary.go/origenDatosNoConfigurado). Obligatoria, mismo
+	// criterio que HERMES_MCP_MONGO_URI: sin el fichero no hay nada util
+	// que devolver, mejor cortar al arrancar con un error claro. A
+	// diferencia de MONGO_URI, esta variable vive en el bloque "env" de
+	// claude_desktop_config.json, NO en ".env" (ver el comentario de
+	// cabecera del archivo y README.md) -- distingue una instalacion de
+	// Claude Desktop de otra, no es config de conexion compartida.
+	relacionesPath, relacionesPathSeteada := os.LookupEnv("HERMES_MCP_RELACIONES_PATH")
+	if !relacionesPathSeteada || relacionesPath == "" {
+		logger.Fatalf("HERMES_MCP_RELACIONES_PATH no esta seteada -- hace falta la ruta al fichero de relaciones a cargar. Configurala en el bloque \"env\" de claude_desktop_config.json (ver README.md, \"Configurar Claude Desktop\"), o en la sesion de shell si corres localmente sin Claude Desktop. Copia relaciones/relaciones.example.json a esa ruta antes, completando origenDatos.")
+	}
+	rel, err := dictionary.LoadRelations(resolverRutaConfig(relacionesPath))
+	if err != nil {
+		logger.Fatalf("no se pudo cargar el fichero de relaciones: %v", err)
+	}
 
 	server := mcp.NewServer("hermes-mcp", "0.3.0-pipeline", logger)
-	tools.RegisterAll(server, g, salidasDir, limitePantalla, timeout, origenDatos)
+	tools.RegisterAll(server, g, salidasDir, limitePantalla, timeout, rel)
 
 	logger.Printf("salidas en %s -- limite de pantalla por defecto %d filas, timeout de pipeline %s", salidasDir, limitePantalla, timeout)
 

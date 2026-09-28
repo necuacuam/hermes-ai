@@ -26,9 +26,9 @@ import (
 // / HERMES_MCP_MONGO_TIMEOUT) -- se configuran juntos a proposito (ver
 // registerReporting): son los dos topes de recursos de cualquier ejecucion
 // de pipeline.
-func RegisterAll(server *mcp.Server, g *graph.Graph, salidasDir string, limitePantallaDefault int, pipelineTimeout time.Duration, origenDatos string) {
-	registerDictionary(server)
-	registerRelation(server, origenDatos)
+func RegisterAll(server *mcp.Server, g *graph.Graph, salidasDir string, limitePantallaDefault int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
+	registerDictionary(server, rel)
+	registerRelation(server, rel)
 	registerSeek(server, g)
 	registerReporting(server, g, salidasDir, limitePantallaDefault, pipelineTimeout)
 }
@@ -43,7 +43,7 @@ type dictionaryArgs struct {
 	Tipo string `json:"tipo"` // "cliente" | "centro" | "punto" | "grupo" | "holding" | "" (todos)
 }
 
-func registerDictionary(server *mcp.Server) {
+func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
 	schema := `{
 		"type": "object",
 		"properties": {
@@ -66,7 +66,7 @@ func registerDictionary(server *mcp.Server) {
 					return mcp.ErrorResult("argumentos invalidos: " + err.Error())
 				}
 			}
-			result := dictionary.Lookup(domain.EntityType(args.Tipo))
+			result := dictionary.Lookup(rel.Campos, domain.EntityType(args.Tipo))
 			b, _ := json.MarshalIndent(result, "", "  ")
 			return mcp.TextResult(string(b))
 		},
@@ -83,13 +83,13 @@ func registerDictionary(server *mcp.Server) {
 // entidades Hermes" que en la arquitectura completa mantiene el Agente
 // Generador. Resolver una entidad REAL por nombre (que cliente, que
 // sucursal) es trabajo de la tool "seek", que si toca datos vivos.
-func registerRelation(server *mcp.Server, origenDatos string) {
+func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
 	server.RegisterTool(
 		"relacion_entre_entidades",
 		"Devuelve como se relacionan ESTRUCTURALMENTE los tipos de entidad de Hermes (holding/grupo/cliente/centro/punto/direccion): jerarquia, prefijos de ucode, el nombre real de coleccion Mongo de cada tipo (util para armar $lookup en un pipeline de 'reporting'), el mecanismo generico de ParentUCode, la nota sobre por que 'direccion' no encaja en esa cadena, el estado de la duda sobre anidamiento centro-en-centro/punto-en-punto, y de que base/entorno viene lo que esta conectado ahora mismo ('origenDatos', configurado por quien corre el servidor -- consultar ESTE campo, nunca asumir un entorno de memoria, antes de calificar datos como 'de prueba' o de un entorno especifico).",
 		jsonSchema(`{"type": "object", "properties": {}}`),
 		func(raw json.RawMessage) mcp.CallToolResult {
-			b, _ := json.MarshalIndent(dictionary.Hierarchy(origenDatos), "", "  ")
+			b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")
 			return mcp.TextResult(string(b))
 		},
 	)

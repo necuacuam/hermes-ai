@@ -54,6 +54,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 
 	"hermes-mcp/internal/domain"
 )
@@ -127,8 +128,8 @@ var forbiddenKeys = map[string]bool{
 	"$eval":             true,
 }
 
-// ValidatePipeline aplica las dos reglas del comentario del paquete. Se
-// llama SIEMPRE antes de PipelineRunner.RunPipeline -- ver esa interfaz.
+// ValidatePipeline aplica las reglas del comentario del paquete. Se llama
+// SIEMPRE antes de PipelineRunner.RunPipeline -- ver esa interfaz.
 func ValidatePipeline(pipeline []map[string]interface{}) error {
 	if len(pipeline) == 0 {
 		return fmt.Errorf("el pipeline esta vacio")
@@ -150,6 +151,67 @@ func ValidatePipeline(pipeline []map[string]interface{}) error {
 		if err := scanForbidden(stage); err != nil {
 			return fmt.Errorf("etapa %d: %w", i, err)
 		}
+	}
+	if err := validarCamposDelPrimerMatch(pipeline[0]); err != nil {
+		return fmt.Errorf("etapa 0: %w", err)
+	}
+	return nil
+}
+
+// validarCamposDelPrimerMatch ataja el otro bug real observado en produccion
+// (2026-09-25, mismo dia que el del espacio antes del "$"): el subagente
+// proyecto/filtro un campo de negocio a nivel RAIZ (ej. "accountName") en
+// vez de bajo "data." (ej. "data.accountName"). A diferencia del bug del
+// espacio, este NO lo rechaza Mongo -- es una consulta valida que
+// simplemente no matchea nada, porque en las 6 entidades de este servidor
+// TODO campo de negocio vive anidado bajo "data" salvo "ucode"/
+// "parentUCode"/"_id" (ver estructuraDeCampos en relaciones.json). Por eso
+// hace falta este chequeo de dominio ademas del generico de sintaxis.
+//
+// Se aplica SOLO al primer $match del pipeline, y solo si la primera etapa
+// es un $match -- es el UNICO punto del pipeline donde se garantiza que
+// ningun campo fue renombrado todavia por un $project/$addFields/$group
+// anterior. Aplicar esta regla mas adelante en el pipeline daria falsos
+// positivos legitimos (ej. un alias como "cantidadPuntos" creado por un
+// $addFields previo y usado despues en un $sort/$match).
+func validarCamposDelPrimerMatch(primeraEtapa map[string]interface{}) error {
+	body, ok := primeraEtapa["$match"]
+	if !ok {
+		return nil // la primera etapa no es un $match -- no hay nada que validar aca
+	}
+	bodyMap, ok := body.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return validarCamposDeFiltro(bodyMap)
+}
+
+// validarCamposDeFiltro recorre las claves de un documento de filtro de
+// $match (bajando un nivel dentro de $and/$or/$nor, que son los unicos
+// operadores logicos que reaparecen con sub-documentos de filtro) y
+// rechaza cualquier nombre de campo -- no operador -- que no sea
+// "ucode"/"parentUCode"/"_id" y no tenga ya el prefijo "data." (una clave
+// con punto se asume ya calificada, no se valida el resto del camino).
+func validarCamposDeFiltro(m map[string]interface{}) error {
+	for k, v := range m {
+		if strings.HasPrefix(k, "$") {
+			if k == "$and" || k == "$or" || k == "$nor" {
+				if arr, ok := v.([]interface{}); ok {
+					for _, item := range arr {
+						if itemMap, ok := item.(map[string]interface{}); ok {
+							if err := validarCamposDeFiltro(itemMap); err != nil {
+								return err
+							}
+						}
+					}
+				}
+			}
+			continue
+		}
+		if k == "ucode" || k == "parentUCode" || k == "_id" || strings.Contains(k, ".") {
+			continue
+		}
+		return fmt.Errorf("el primer $match filtra por %q, pero en las 6 entidades de este servidor todo campo de negocio vive bajo \"data.\" -- salvo \"ucode\"/\"parentUCode\"/\"_id\", que son de nivel raiz. ¿Se referia a \"data.%s\"? (si %q es realmente un alias de nivel raiz valido, revisar por que este chequeo lo esta bloqueando)", k, k, k)
 	}
 	return nil
 }
@@ -182,12 +244,28 @@ func validarColeccionDestino(stageBody interface{}) error {
 // scanForbidden recorre recursivamente cualquier valor (mapa, slice, o
 // escalar) buscando alguna de las claves de forbiddenKeys en cualquier
 // nivel de anidamiento.
+//
+// TAMBIEN detecta (agregado 2026-09-25, tras varios bugs reales identicos
+// del subagente armando pipelines) una clave que es un operador Mongo con
+// espacio(s) de mas ANTES del "$" (ej. " $exists" en vez de "$exists").
+// Mongo no trata eso como un error: lo interpreta como un nombre de campo
+// LITERAL, asi que el $match/$project correspondiente deja de hacer lo que
+// se pretendia y el pipeline devuelve 0 resultados (o datos incorrectos) en
+// silencio, sin ningun error que lo delate. Como la key completa (con el
+// espacio) es arbitraria y no puede listarse de antemano, se detecta con
+// una regla generica: cualquier clave de mapa que, despues de sacarle los
+// espacios/tabs iniciales, empieza con "$" pero la clave ORIGINAL no
+// empezaba con "$", es casi con certeza este typo -- no hay un uso
+// legitimo conocido de una clave asi en este proyecto.
 func scanForbidden(v interface{}) error {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, inner := range val {
 			if forbiddenKeys[k] {
 				return fmt.Errorf("operador no permitido: %q", k)
+			}
+			if trimmed := strings.TrimLeft(k, " \t"); trimmed != k && strings.HasPrefix(trimmed, "$") {
+				return fmt.Errorf("clave %q parece un operador Mongo con espacio de mas antes del \"$\" (¿se referia a %q?) -- esto NO es un error de sintaxis para Mongo, se ejecuta como nombre de campo literal y devuelve un resultado incorrecto en silencio (tipicamente 0 documentos); corregir el espacio y reintentar", k, trimmed)
 			}
 			if err := scanForbidden(inner); err != nil {
 				return err
