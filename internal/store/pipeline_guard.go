@@ -21,8 +21,9 @@
 // escalar mas alla de esta v1 local): esto es una lista blanca por NOMBRE
 // de etapa/operador, no un parser completo de la gramatica de agregacion
 // de Mongo -- no se audita, por ejemplo, cuanto trabajo puede pedir un
-// $lookup sin indice o un $graphLookup sin maxDepth, ni hay timeout
-// (maxTimeMS) sobre la ejecucion. Para el uso previsto (un unico usuario
+// $lookup sin indice o un $graphLookup sin maxDepth. Lo que lo acota es el
+// tope de tiempo (HERMES_MCP_MONGO_TIMEOUT), que tambien se le pasa a
+// Mongo como maxTimeMS (ver mongostore.RunPipelineStream). Para el uso previsto (un unico usuario
 // local contra su propia base ya restaurada) se considera un compromiso
 // razonable; si este servidor se expone a mas usuarios o a una base
 // compartida, esto hay que revisarlo primero.
@@ -50,11 +51,34 @@
 // 7ma entidad completa, que es justo lo que se decidio no hacer) -- solo
 // se permite como destino de un $lookup/$graphLookup de solo lectura
 // desde alguna de las 6 colecciones reales, tipicamente servicePoint.
+//
+// QUITADOS (2026-10-03, decision de TAvo): dos chequeos agregados el
+// 2026-09-25 por errores de un LLM mas debil (OpenAI en Open WebUI): el que
+// exigia el prefijo "data." en los campos del primer $match y el de un
+// espacio antes del "$" en un operador. Ese LLM ya no se usa, y el primero
+// bloqueaba campos reales de nivel raiz (uuid, countryCode, revision).
+// Las reglas de seguridad de arriba se mantienen: no dependen del LLM.
+//
+// SUB-PIPELINES (2026-10-06): la lista blanca de etapas y el control de
+// "from" se aplicaban solo al primer nivel; dentro de un $facet o del
+// "pipeline" de un $lookup pasaba un $lookup o un $unionWith hacia
+// cualquier coleccion de la base. Ahora los sub-pipelines se validan con
+// las mismas reglas que el pipeline principal (validarSubPipelines): una
+// etapa que no esta en allowedStages, como $unionWith, se rechaza en
+// cualquier nivel.
+//
+// CLAVES REPETIDAS (2026-10-06): ValidatePipeline revisa cada etapa
+// decodificada a map, donde una clave repetida queda con su ultimo valor,
+// pero Mongo ejecuta el texto original con las dos. Con
+// {"from": "<fuera de alcance>", "from": "servicePlace"} el validador veia
+// solo servicePlace. ValidarClavesUnicas rechaza esos pipelines antes de
+// validar, para que lo validado sea lo mismo que se ejecuta.
 package store
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"strings"
 
 	"hermes-mcp/internal/domain"
 )
@@ -87,26 +111,26 @@ var coleccionesPermitidas = func() map[string]bool {
 // ejecutar. Todas son de lectura -- ninguna escribe en la base ni ejecuta
 // JS arbitrario del lado del servidor.
 var allowedStages = map[string]bool{
-	"$match":        true,
-	"$project":      true,
-	"$addFields":    true,
-	"$set":          true,
-	"$unset":        true,
-	"$sort":         true,
-	"$limit":        true,
-	"$skip":         true,
-	"$count":        true,
-	"$group":        true,
-	"$unwind":       true,
-	"$lookup":       true,
-	"$facet":        true,
-	"$replaceRoot":  true,
-	"$replaceWith":  true,
-	"$graphLookup":  true,
-	"$sample":       true,
-	"$bucket":       true,
-	"$bucketAuto":   true,
-	"$sortByCount":  true,
+	"$match":       true,
+	"$project":     true,
+	"$addFields":   true,
+	"$set":         true,
+	"$unset":       true,
+	"$sort":        true,
+	"$limit":       true,
+	"$skip":        true,
+	"$count":       true,
+	"$group":       true,
+	"$unwind":      true,
+	"$lookup":      true,
+	"$facet":       true,
+	"$replaceRoot": true,
+	"$replaceWith": true,
+	"$graphLookup": true,
+	"$sample":      true,
+	"$bucket":      true,
+	"$bucketAuto":  true,
+	"$sortByCount": true,
 }
 
 // forbiddenKeys son operadores/comandos prohibidos en CUALQUIER posicion
@@ -114,18 +138,18 @@ var allowedStages = map[string]bool{
 // ejecutan JS arbitrario, escriben datos, o exponen estado del servidor
 // que no tiene nada que ver con las 6 entidades de este proyecto.
 var forbiddenKeys = map[string]bool{
-	"$out":              true,
-	"$merge":            true,
-	"$where":            true,
-	"$function":         true,
-	"$accumulator":      true,
-	"$currentOp":        true,
-	"$indexStats":       true,
-	"$collStats":        true,
-	"$planCacheStats":   true,
-	"$listSessions":     true,
+	"$out":               true,
+	"$merge":             true,
+	"$where":             true,
+	"$function":          true,
+	"$accumulator":       true,
+	"$currentOp":         true,
+	"$indexStats":        true,
+	"$collStats":         true,
+	"$planCacheStats":    true,
+	"$listSessions":      true,
 	"$listLocalSessions": true,
-	"$eval":             true,
+	"$eval":              true,
 }
 
 // ValidatePipeline aplica las reglas del comentario del paquete. Se llama
@@ -134,86 +158,82 @@ func ValidatePipeline(pipeline []map[string]interface{}) error {
 	if len(pipeline) == 0 {
 		return fmt.Errorf("el pipeline esta vacio")
 	}
+	etapas := make([]interface{}, len(pipeline))
 	for i, stage := range pipeline {
+		etapas[i] = stage
+	}
+	return validarEtapas(etapas, "")
+}
+
+// validarEtapas aplica las reglas a una lista de etapas: el pipeline
+// principal o un sub-pipeline (ver validarSubPipeline). ruta antepone en los
+// errores donde esta la etapa dentro del pipeline principal.
+func validarEtapas(etapas []interface{}, ruta string) error {
+	for i, e := range etapas {
+		stage, ok := e.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("%setapa %d invalida: se esperaba un objeto con un unico operador de etapa", ruta, i)
+		}
 		if len(stage) != 1 {
-			return fmt.Errorf("etapa %d invalida: se esperaba un unico operador de etapa (ej. {\"$match\": {...}}), se recibieron %d claves", i, len(stage))
+			return fmt.Errorf("%setapa %d invalida: se esperaba un unico operador de etapa (ej. {\"$match\": {...}}), se recibieron %d claves", ruta, i, len(stage))
 		}
 		for name, body := range stage {
 			if !allowedStages[name] {
-				return fmt.Errorf("etapa %d no permitida: %q -- solo se permiten etapas de lectura (ver store.allowedStages)", i, name)
+				return fmt.Errorf("%setapa %d no permitida: %q -- solo se permiten etapas de lectura (ver store.allowedStages)", ruta, i, name)
 			}
 			if name == "$lookup" || name == "$graphLookup" {
 				if err := validarColeccionDestino(body); err != nil {
-					return fmt.Errorf("etapa %d (%s): %w", i, name, err)
+					return fmt.Errorf("%setapa %d (%s): %w", ruta, i, name, err)
 				}
+			}
+			if err := validarSubPipelines(name, body, fmt.Sprintf("%setapa %d (%s) > ", ruta, i, name)); err != nil {
+				return err
 			}
 		}
 		if err := scanForbidden(stage); err != nil {
-			return fmt.Errorf("etapa %d: %w", i, err)
+			return fmt.Errorf("%setapa %d: %w", ruta, i, err)
 		}
-	}
-	if err := validarCamposDelPrimerMatch(pipeline[0]); err != nil {
-		return fmt.Errorf("etapa 0: %w", err)
 	}
 	return nil
 }
 
-// validarCamposDelPrimerMatch ataja el otro bug real observado en produccion
-// (2026-09-25, mismo dia que el del espacio antes del "$"): el subagente
-// proyecto/filtro un campo de negocio a nivel RAIZ (ej. "accountName") en
-// vez de bajo "data." (ej. "data.accountName"). A diferencia del bug del
-// espacio, este NO lo rechaza Mongo -- es una consulta valida que
-// simplemente no matchea nada, porque en las 6 entidades de este servidor
-// TODO campo de negocio vive anidado bajo "data" salvo "ucode"/
-// "parentUCode"/"_id" (ver estructuraDeCampos en relaciones.json). Por eso
-// hace falta este chequeo de dominio ademas del generico de sintaxis.
-//
-// Se aplica SOLO al primer $match del pipeline, y solo si la primera etapa
-// es un $match -- es el UNICO punto del pipeline donde se garantiza que
-// ningun campo fue renombrado todavia por un $project/$addFields/$group
-// anterior. Aplicar esta regla mas adelante en el pipeline daria falsos
-// positivos legitimos (ej. un alias como "cantidadPuntos" creado por un
-// $addFields previo y usado despues en un $sort/$match).
-func validarCamposDelPrimerMatch(primeraEtapa map[string]interface{}) error {
-	body, ok := primeraEtapa["$match"]
-	if !ok {
-		return nil // la primera etapa no es un $match -- no hay nada que validar aca
-	}
-	bodyMap, ok := body.(map[string]interface{})
-	if !ok {
-		return nil
-	}
-	return validarCamposDeFiltro(bodyMap)
-}
-
-// validarCamposDeFiltro recorre las claves de un documento de filtro de
-// $match (bajando un nivel dentro de $and/$or/$nor, que son los unicos
-// operadores logicos que reaparecen con sub-documentos de filtro) y
-// rechaza cualquier nombre de campo -- no operador -- que no sea
-// "ucode"/"parentUCode"/"_id" y no tenga ya el prefijo "data." (una clave
-// con punto se asume ya calificada, no se valida el resto del camino).
-func validarCamposDeFiltro(m map[string]interface{}) error {
-	for k, v := range m {
-		if strings.HasPrefix(k, "$") {
-			if k == "$and" || k == "$or" || k == "$nor" {
-				if arr, ok := v.([]interface{}); ok {
-					for _, item := range arr {
-						if itemMap, ok := item.(map[string]interface{}); ok {
-							if err := validarCamposDeFiltro(itemMap); err != nil {
-								return err
-							}
-						}
-					}
-				}
+// validarSubPipelines valida con las mismas reglas los pipelines anidados
+// de una etapa: las ramas de $facet y el "pipeline" de $lookup
+// (2026-10-06). Antes solo se barrian las claves prohibidas, y un $lookup
+// hacia cualquier coleccion de la base pasaba si estaba dentro de un
+// $facet o del sub-pipeline de otro $lookup.
+func validarSubPipelines(name string, body interface{}, ruta string) error {
+	switch name {
+	case "$facet":
+		ramas, ok := body.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("%sse esperaba un objeto con las ramas", ruta)
+		}
+		for rama, sub := range ramas {
+			if err := validarSubPipeline(sub, ruta+rama+" > "); err != nil {
+				return err
 			}
-			continue
 		}
-		if k == "ucode" || k == "parentUCode" || k == "_id" || strings.Contains(k, ".") {
-			continue
+	case "$lookup":
+		b, ok := body.(map[string]interface{})
+		if !ok {
+			return nil
 		}
-		return fmt.Errorf("el primer $match filtra por %q, pero en las 6 entidades de este servidor todo campo de negocio vive bajo \"data.\" -- salvo \"ucode\"/\"parentUCode\"/\"_id\", que son de nivel raiz. ¿Se referia a \"data.%s\"? (si %q es realmente un alias de nivel raiz valido, revisar por que este chequeo lo esta bloqueando)", k, k, k)
+		if sub, ok := b["pipeline"]; ok {
+			return validarSubPipeline(sub, ruta+"pipeline > ")
+		}
 	}
 	return nil
+}
+
+// validarSubPipeline exige que el sub-pipeline sea una lista de etapas: si
+// no, no se puede validar y se rechaza. Puede estar vacio.
+func validarSubPipeline(sub interface{}, ruta string) error {
+	etapas, ok := sub.([]interface{})
+	if !ok {
+		return fmt.Errorf("%sse esperaba una lista de etapas", ruta)
+	}
+	return validarEtapas(etapas, ruta)
 }
 
 // validarColeccionDestino comprueba que el "from" de un $lookup/
@@ -236,7 +256,7 @@ func validarColeccionDestino(stageBody interface{}) error {
 		return nil
 	}
 	if !coleccionesPermitidas[fromStr] {
-		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las 6 entidades tipo cuenta (serviceHolding, serviceGroup, serviceEntity, servicePlace, servicePoint, serviceAddress) o hacia una coleccion auxiliar habilitada explicitamente (operativeLevel)", fromStr)
+		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las 7 entidades del alcance (serviceHolding, serviceGroup, serviceEntity, servicePlace, servicePoint, serviceAddress, salesPerson) o hacia una coleccion auxiliar habilitada explicitamente (operativeLevel)", fromStr)
 	}
 	return nil
 }
@@ -244,28 +264,12 @@ func validarColeccionDestino(stageBody interface{}) error {
 // scanForbidden recorre recursivamente cualquier valor (mapa, slice, o
 // escalar) buscando alguna de las claves de forbiddenKeys en cualquier
 // nivel de anidamiento.
-//
-// TAMBIEN detecta (agregado 2026-09-25, tras varios bugs reales identicos
-// del subagente armando pipelines) una clave que es un operador Mongo con
-// espacio(s) de mas ANTES del "$" (ej. " $exists" en vez de "$exists").
-// Mongo no trata eso como un error: lo interpreta como un nombre de campo
-// LITERAL, asi que el $match/$project correspondiente deja de hacer lo que
-// se pretendia y el pipeline devuelve 0 resultados (o datos incorrectos) en
-// silencio, sin ningun error que lo delate. Como la key completa (con el
-// espacio) es arbitraria y no puede listarse de antemano, se detecta con
-// una regla generica: cualquier clave de mapa que, despues de sacarle los
-// espacios/tabs iniciales, empieza con "$" pero la clave ORIGINAL no
-// empezaba con "$", es casi con certeza este typo -- no hay un uso
-// legitimo conocido de una clave asi en este proyecto.
 func scanForbidden(v interface{}) error {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, inner := range val {
 			if forbiddenKeys[k] {
 				return fmt.Errorf("operador no permitido: %q", k)
-			}
-			if trimmed := strings.TrimLeft(k, " \t"); trimmed != k && strings.HasPrefix(trimmed, "$") {
-				return fmt.Errorf("clave %q parece un operador Mongo con espacio de mas antes del \"$\" (¿se referia a %q?) -- esto NO es un error de sintaxis para Mongo, se ejecuta como nombre de campo literal y devuelve un resultado incorrecto en silencio (tipicamente 0 documentos); corregir el espacio y reintentar", k, trimmed)
 			}
 			if err := scanForbidden(inner); err != nil {
 				return err
@@ -283,6 +287,59 @@ func scanForbidden(v interface{}) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// ValidarClavesUnicas rechaza un pipeline si algun objeto, en cualquier
+// nivel, repite una clave. Se llama antes de decodificar las etapas para
+// ValidatePipeline -- ver la nota del paquete.
+func ValidarClavesUnicas(pipeline []json.RawMessage) error {
+	for i, raw := range pipeline {
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		dec.UseNumber()
+		if err := leerSinClavesRepetidas(dec); err != nil {
+			return fmt.Errorf("etapa %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func leerSinClavesRepetidas(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return fmt.Errorf("no es JSON valido: %w", err)
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil // valor simple
+	}
+	switch delim {
+	case '{':
+		vistas := map[string]bool{}
+		for dec.More() {
+			t, err := dec.Token()
+			if err != nil {
+				return fmt.Errorf("no es JSON valido: %w", err)
+			}
+			clave, _ := t.(string)
+			if vistas[clave] {
+				return fmt.Errorf("la clave %q esta repetida en el mismo objeto", clave)
+			}
+			vistas[clave] = true
+			if err := leerSinClavesRepetidas(dec); err != nil {
+				return err
+			}
+		}
+	case '[':
+		for dec.More() {
+			if err := leerSinClavesRepetidas(dec); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil { // cierre del objeto o la lista
+		return fmt.Errorf("no es JSON valido: %w", err)
 	}
 	return nil
 }

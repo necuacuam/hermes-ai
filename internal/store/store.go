@@ -9,6 +9,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"hermes-mcp/internal/domain"
@@ -62,7 +63,10 @@ type PipelineRunner interface {
 	// entidad. El caller es responsable de validar el pipeline con
 	// ValidatePipeline ANTES de llamar a este metodo -- RunPipeline no
 	// vuelve a validar.
-	RunPipeline(ctx context.Context, t domain.EntityType, pipeline []map[string]interface{}) ([]map[string]interface{}, error)
+	//
+	// Cada etapa llega como texto JSON crudo y se ejecuta desde ese texto,
+	// para conservar el orden de sus claves (ej. un $sort por varios campos).
+	RunPipeline(ctx context.Context, t domain.EntityType, pipeline []json.RawMessage) ([]map[string]interface{}, error)
 
 	// RunPipelineStream es igual que RunPipeline pero entrega los
 	// documentos DE A UNO via onDoc, en vez de acumular el resultado
@@ -78,8 +82,15 @@ type PipelineRunner interface {
 	// ya tiene lo que necesita y no hace falta seguir leyendo el cursor.
 	// Cualquier otro error de onDoc se propaga tal cual y corta la
 	// iteracion.
-	RunPipelineStream(ctx context.Context, t domain.EntityType, pipeline []map[string]interface{}, onDoc func(map[string]interface{}) error) error
+	RunPipelineStream(ctx context.Context, t domain.EntityType, pipeline []json.RawMessage, onDoc func(map[string]interface{}) error) error
 }
+
+// LimiteSeekPorDefecto es la cantidad maxima de candidatos que devuelve la
+// tool "seek" si HERMES_MCP_LIMITE_SEEK no esta seteada (2026-10-06). Antes
+// no tenia tope: un needle muy generico traia todas las entidades de todos
+// los tipos y se las devolvia enteras al agente. Si hay mas, seek lo avisa
+// para que el agente acote la busqueda.
+const LimiteSeekPorDefecto = 50
 
 // ErrStopStream es el error centinela que onDoc puede devolver para pedirle
 // a RunPipelineStream que corte la iteracion sin que eso cuente como una

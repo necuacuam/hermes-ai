@@ -17,8 +17,8 @@
 //     sincronizacion entre sistemas, no tiene datos de negocio.
 //   - El nombre de negocio NO esta a nivel raiz (no existe un campo
 //     "name") -- vive ADENTRO de "data", con distinto campo segun el tipo
-//     y sin una unica fuente confiable (ver nameFieldCandidates/
-//     pickDisplayName mas abajo para el detalle).
+//     y sin una unica fuente confiable (ver dictionary.RelationsData.
+//     CamposDeNombre / pickDisplayName mas abajo para el detalle).
 //   - "data" mezcla strings, booleanos (billingCenter, financialEntity,
 //     merged) y arrays (agents, contacts) -- por eso Data en mongoDoc es
 //     map[string]interface{}, no map[string]string.
@@ -40,6 +40,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
@@ -58,6 +59,29 @@ import (
 // falta ajustar por instalacion; si en el futuro hace falta, es un cambio
 // de una linea.
 const pipelineBatchSize = 500
+
+// claveEnURI reconoce la contraseña de una URI de Mongo
+// (mongodb://usuario:clave@host...).
+var claveEnURI = regexp.MustCompile(`(://[^:/@]*:)[^@/]*@`)
+
+// URISinClave devuelve la URI con la contraseña tapada, para logs y
+// mensajes de error (2026-10-06): Claude Desktop guarda en texto plano todo
+// lo que el servidor escribe en su log.
+func URISinClave(uri string) string {
+	return claveEnURI.ReplaceAllString(uri, "${1}****@")
+}
+
+// tiempoRestante devuelve cuanto le queda al deadline de ctx, para pasarlo
+// a Mongo como maxTimeMS: asi el servidor corta la consulta de su lado
+// aunque el driver no respete la cancelacion del context.
+func tiempoRestante(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	restante := time.Until(deadline)
+	return restante, restante > 0
+}
 
 // collectionNames mapea cada tipo a su coleccion Mongo. Vive en domain
 // (domain.CollectionName) para que dictionary.Hierarchy() pueda exponer el
@@ -122,23 +146,20 @@ type mongoDoc struct {
 	Data        map[string]interface{} `bson:"data,omitempty"`
 }
 
-// nameFieldCandidates son, en los datos reales, los campos de "data" que
-// pueden contener el nombre de negocio de una entidad (no aplica a
-// direccion, que no tiene ninguno de estos -- ver comentario de mongoDoc).
-// Se usan tanto para elegir que mostrar como Name (pickDisplayName) como
-// para buscar por nombre (FindByNameAndType) -- una sola lista, no dos
-// mantenidas por separado.
-var nameFieldCandidates = []string{
-	"accountName", "customerName", "legalName", "longName", "shortName", "accountDescription",
-}
+// camposDeNombre YA NO vive hardcodeado aca (ver comentario de
+// RelationsData.CamposDeNombre en dictionary.go -- movido 2026-09-28,
+// contenido de negocio curado a mano que no tiene que exigir recompilar el
+// binario para cambiar). MongoStore lo recibe por tipo en New() y lo usa
+// tanto para elegir que mostrar como Name (pickDisplayName) como para
+// buscar por nombre (FindByNameAndType).
 
-// pickDisplayName elige, entre nameFieldCandidates, el valor string no
-// vacio MAS LARGO presente en data -- ver el comentario de mongoDoc sobre
-// por que ("accountName" puede venir truncado, y no hay una unica fuente
-// confiable segun el tipo).
-func pickDisplayName(data map[string]interface{}) string {
+// pickDisplayName elige, entre candidatos, el valor string no vacio MAS
+// LARGO presente en data -- ver el comentario de mongoDoc sobre por que
+// ("accountName" puede venir truncado, y no hay una unica fuente confiable
+// segun el tipo).
+func pickDisplayName(data map[string]interface{}, candidatos []string) string {
 	best := ""
-	for _, campo := range nameFieldCandidates {
+	for _, campo := range candidatos {
 		v, ok := data[campo]
 		if !ok {
 			continue
@@ -154,33 +175,43 @@ func pickDisplayName(data map[string]interface{}) string {
 	return best
 }
 
-func (d mongoDoc) toDomain(t domain.EntityType) domain.Document {
+func (d mongoDoc) toDomain(t domain.EntityType, camposDeNombre []string) domain.Document {
 	return domain.Document{
 		UCode:       d.UCode,
 		ParentUCode: d.ParentUCode,
 		Type:        t,
-		Name:        pickDisplayName(d.Data),
+		Name:        pickDisplayName(d.Data, camposDeNombre),
 		Attributes:  d.Data,
 	}
 }
 
 type MongoStore struct {
-	db *mongo.Database
+	db             *mongo.Database
+	camposDeNombre map[domain.EntityType][]string
+	limiteSeek     int // ver SetLimiteSeek
+}
+
+// SetLimiteSeek fija cuantos candidatos trae como maximo FindByNameAndType
+// (HERMES_MCP_LIMITE_SEEK). <= 0 usa store.LimiteSeekPorDefecto.
+func (m *MongoStore) SetLimiteSeek(n int) {
+	m.limiteSeek = n
 }
 
 // New conecta contra uri (ej. "mongodb://localhost:27017") y la base
 // dbName (ej. "hermes-local"). Hace ping antes de devolver, para fallar
 // rapido si Mongo no esta arriba en vez de fallar recien en el primer
-// query.
-func New(ctx context.Context, uri, dbName string) (*MongoStore, error) {
+// query. camposDeNombre viene del fichero de relaciones externo (ver
+// dictionary.RelationsData.CamposDeNombre) -- por eso en main.go la carga
+// de ese fichero ahora pasa ANTES de construir el MongoStore.
+func New(ctx context.Context, uri, dbName string, camposDeNombre map[domain.EntityType][]string) (*MongoStore, error) {
 	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
-		return nil, fmt.Errorf("no se pudo conectar a Mongo (%s): %w", uri, err)
+		return nil, fmt.Errorf("no se pudo conectar a Mongo (%s): %w", URISinClave(uri), err)
 	}
 	if err := client.Ping(ctx, nil); err != nil {
-		return nil, fmt.Errorf("Mongo no responde en %s: %w", uri, err)
+		return nil, fmt.Errorf("Mongo no responde en %s: %w", URISinClave(uri), err)
 	}
-	return &MongoStore{db: client.Database(dbName)}, nil
+	return &MongoStore{db: client.Database(dbName), camposDeNombre: camposDeNombre}, nil
 }
 
 func (m *MongoStore) FindByNameAndType(ctx context.Context, needle string, t domain.EntityType) ([]domain.Document, error) {
@@ -188,17 +219,34 @@ func (m *MongoStore) FindByNameAndType(ctx context.Context, needle string, t dom
 	if !ok {
 		return nil, fmt.Errorf("tipo de entidad desconocido: %s", t)
 	}
-	// $or sobre todos los campos de nombre candidatos (ver nameFieldCandidates
-	// y el comentario de mongoDoc) -- direccion no tiene ninguno de estos
-	// campos, asi que para ese tipo esta busqueda siempre da 0 resultados a
-	// proposito (no es un error: direccion se identifica por domicilio, no
-	// por nombre de negocio).
-	or := make(bson.A, 0, len(nameFieldCandidates))
-	for _, campo := range nameFieldCandidates {
+	candidatos := m.camposDeNombre[t]
+	if len(candidatos) == 0 {
+		// Sin campos de nombre configurados para este tipo (ej. direccion,
+		// que se identifica por domicilio, no por nombre de negocio) -- 0
+		// resultados a proposito, sin pegarle a Mongo con un $or vacio.
+		return nil, nil
+	}
+	// $or sobre todos los campos de nombre candidatos de este tipo (ver
+	// dictionary.RelationsData.CamposDeNombre y el comentario de mongoDoc).
+	// needle es una expresion regular (PCRE de Mongo, sin distinguir
+	// mayusculas): el agente puede buscar "^IKEA" o "PETROGAL|GALP". Un
+	// patron que coincide con todo lo acota el tope de candidatos, y uno
+	// lento, el tiempo maximo (2026-10-06).
+	or := make(bson.A, 0, len(candidatos))
+	for _, campo := range candidatos {
 		or = append(or, bson.M{"data." + campo: bson.M{"$regex": needle, "$options": "i"}})
 	}
 	filter := bson.M{"$or": or}
-	cur, err := m.db.Collection(collName).Find(ctx, filter)
+	// Uno mas que el tope, para que quien llama sepa que hubo mas.
+	limite := m.limiteSeek
+	if limite <= 0 {
+		limite = store.LimiteSeekPorDefecto
+	}
+	opts := options.Find().SetLimit(int64(limite + 1))
+	if restante, ok := tiempoRestante(ctx); ok {
+		opts.SetMaxTime(restante)
+	}
+	cur, err := m.db.Collection(collName).Find(ctx, filter, opts)
 	if err != nil {
 		return nil, fmt.Errorf("error buscando en %s: %w", collName, err)
 	}
@@ -210,7 +258,7 @@ func (m *MongoStore) FindByNameAndType(ctx context.Context, needle string, t dom
 		if err := cur.Decode(&d); err != nil {
 			return nil, fmt.Errorf("documento invalido en %s: %w", collName, err)
 		}
-		out = append(out, d.toDomain(t))
+		out = append(out, d.toDomain(t, candidatos))
 	}
 	return out, cur.Err()
 }
@@ -223,7 +271,11 @@ func (m *MongoStore) FindChildren(ctx context.Context, parentUCode string) ([]do
 	var out []domain.Document
 	for _, t := range allTypes {
 		collName := collectionNames[t]
-		cur, err := m.db.Collection(collName).Find(ctx, bson.M{"parentUCode": parentUCode})
+		opts := options.Find()
+		if restante, ok := tiempoRestante(ctx); ok {
+			opts.SetMaxTime(restante)
+		}
+		cur, err := m.db.Collection(collName).Find(ctx, bson.M{"parentUCode": parentUCode}, opts)
 		if err != nil {
 			return nil, fmt.Errorf("error buscando hijos en %s: %w", collName, err)
 		}
@@ -233,7 +285,7 @@ func (m *MongoStore) FindChildren(ctx context.Context, parentUCode string) ([]do
 				cur.Close(ctx)
 				return nil, fmt.Errorf("documento invalido en %s: %w", collName, err)
 			}
-			out = append(out, d.toDomain(t))
+			out = append(out, d.toDomain(t, m.camposDeNombre[t]))
 		}
 		cerr := cur.Err()
 		cur.Close(ctx)
@@ -275,7 +327,7 @@ func (m *MongoStore) Get(ctx context.Context, ucode string) (domain.Document, bo
 // ser grande y se va a escribir a un archivo (ver internal/reporting.
 // StreamWriter) -- no tiene sentido cargar todo aca para volver a iterarlo
 // del otro lado.
-func (m *MongoStore) RunPipeline(ctx context.Context, t domain.EntityType, pipeline []map[string]interface{}) ([]map[string]interface{}, error) {
+func (m *MongoStore) RunPipeline(ctx context.Context, t domain.EntityType, pipeline []json.RawMessage) ([]map[string]interface{}, error) {
 	var out []map[string]interface{}
 	err := m.RunPipelineStream(ctx, t, pipeline, func(doc map[string]interface{}) error {
 		out = append(out, doc)
@@ -309,15 +361,39 @@ func (m *MongoStore) RunPipeline(ctx context.Context, t domain.EntityType, pipel
 // encoding/json de una sola vez, documento por documento (no de a lote), asi
 // que el costo es proporcional a UN documento por vez, no al resultado
 // completo.
-func (m *MongoStore) RunPipelineStream(ctx context.Context, t domain.EntityType, pipeline []map[string]interface{}, onDoc func(map[string]interface{}) error) error {
+// pipelineDesdeExtJSON convierte cada etapa a BSON leyéndola como Extended
+// JSON (2026-10-03, pedido de TAvo), en vez de pasar el map tal cual. Así
+// un pipeline puede usar tipos que JSON plano no tiene -- {"$uuid": "..."},
+// {"$binary": {...}}, {"$date": "..."}, {"$oid": "..."} -- y llegan a Mongo
+// como UUID/binario/fecha/ObjectId reales. Antes llegaban como un
+// sub-documento con una clave "$uuid" y Mongo los rechazaba. Caso que lo
+// motivó: cruzar cliente.data.agentId (string) con salesPerson.uuid
+// (binario) -- con esto se puede filtrar salesPerson por
+// {"uuid": {"$in": [{"$uuid": "<agentId>"}]}} usando el agentId tal cual.
+// Un pipeline sin estos tipos se convierte igual que antes.
+//
+// Cada etapa se convierte desde su texto original a bson.D, que conserva el
+// orden de las claves (2026-10-03): antes pasaba por un map y un $sort por
+// varios campos llegaba a Mongo en orden alfabetico, sin error.
+func pipelineDesdeExtJSON(pipeline []json.RawMessage) ([]bson.D, error) {
+	out := make([]bson.D, len(pipeline))
+	for i, raw := range pipeline {
+		if err := bson.UnmarshalExtJSON(raw, false, &out[i]); err != nil {
+			return nil, fmt.Errorf("etapa %d: Extended JSON invalido (revisar $uuid/$binary/$date/$oid): %w", i, err)
+		}
+	}
+	return out, nil
+}
+
+func (m *MongoStore) RunPipelineStream(ctx context.Context, t domain.EntityType, pipeline []json.RawMessage, onDoc func(map[string]interface{}) error) error {
 	collName, ok := collectionNames[t]
 	if !ok {
 		return fmt.Errorf("tipo de entidad desconocido: %s", t)
 	}
 
-	mongoPipeline := make([]bson.M, len(pipeline))
-	for i, stage := range pipeline {
-		mongoPipeline[i] = bson.M(stage)
+	mongoPipeline, err := pipelineDesdeExtJSON(pipeline)
+	if err != nil {
+		return err
 	}
 
 	opts := options.Aggregate().SetBatchSize(pipelineBatchSize)
@@ -361,12 +437,16 @@ func (m *MongoStore) RunPipelineStream(ctx context.Context, t domain.EntityType,
 
 func (m *MongoStore) getFrom(ctx context.Context, collName string, t domain.EntityType, ucode string) (domain.Document, bool, error) {
 	var d mongoDoc
-	err := m.db.Collection(collName).FindOne(ctx, bson.M{"ucode": ucode}).Decode(&d)
+	opts := options.FindOne()
+	if restante, ok := tiempoRestante(ctx); ok {
+		opts.SetMaxTime(restante)
+	}
+	err := m.db.Collection(collName).FindOne(ctx, bson.M{"ucode": ucode}, opts).Decode(&d)
 	if err == mongo.ErrNoDocuments {
 		return domain.Document{}, false, nil
 	}
 	if err != nil {
 		return domain.Document{}, false, fmt.Errorf("error buscando %s en %s: %w", ucode, collName, err)
 	}
-	return d.toDomain(t), true, nil
+	return d.toDomain(t, m.camposDeNombre[t]), true, nil
 }

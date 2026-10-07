@@ -18,25 +18,41 @@ package domain
 type EntityType string
 
 const (
-	Holding    EntityType = "holding"
-	Grupo      EntityType = "grupo"
-	Cliente    EntityType = "cliente"
-	Centro     EntityType = "centro"
-	Punto      EntityType = "punto"
-	Direccion  EntityType = "direccion"
+	Holding     EntityType = "holding"
+	Grupo       EntityType = "grupo"
+	Cliente     EntityType = "cliente"
+	Centro      EntityType = "centro"
+	Punto       EntityType = "punto"
+	Direccion   EntityType = "direccion"
+	SalesPerson EntityType = "salesPerson"
 )
 
-// AllTypes lista los 6 tipos en orden de jerarquia -- usado por busquedas
-// que no pueden asumir de antemano a que tipo pertenece una entidad (ver
-// tool "seek": el usuario puede nombrar algo sin saber si es un cliente,
-// un centro, etc.).
-var AllTypes = []EntityType{Holding, Grupo, Cliente, Centro, Punto, Direccion}
+// AllTypes lista los 7 tipos -- usado por busquedas que no pueden asumir de
+// antemano a que tipo pertenece una entidad (ver tool "seek": el usuario
+// puede nombrar algo sin saber si es un cliente, un centro, etc.).
+// SalesPerson se agrego 2026-09-28 (7ma entidad, pedido explicito de TAvo)
+// -- va AL FINAL, fuera de la jerarquia holding->grupo->cliente->centro->
+// punto (igual que direccion, que tampoco participa de esa cadena): no
+// tiene parentUCode ni un prefijo MDM fijo (ver MDMPrefix mas abajo), asi
+// que no cuelga de nadie ni nadie cuelga de el via ParentUCode -- se
+// relaciona con cliente/grupo/holding por un campo distinto (data.agentId/
+// data.agents, ver relaciones.json/otrasRelaciones), no por la cadena
+// ucode/parentUCode que camina graph.go.
+var AllTypes = []EntityType{Holding, Grupo, Cliente, Centro, Punto, Direccion, SalesPerson}
 
 // MDMPrefix es el prefijo de 2 digitos que Hermes usa en el propio ucode
 // para codificar el tipo de entidad (ver mdm-model.go / entity.go del repo
 // de Hermes). Se guarda aca solo a fin informativo/documental -- el
 // traversal de este proyecto NO depende de este prefijo para decidir a que
 // tipo pertenece un documento (ver nota en graph.go sobre por que).
+//
+// SalesPerson A PROPOSITO NO esta aca: confirmado contra el codigo fuente
+// real (main.go, Init()) que su UCodeType es UCODE_FREE con UCodePrefix
+// vacio -- no usa el esquema de prefijo MDM de 2 digitos que si usan las
+// otras 6 (la tabla estatica de entity.go dice Prefix:"00", pero esa tabla
+// no refleja la configuracion real de runtime; ver investigacion
+// 2026-09-2x). Agregarlo aca rompería mongostore.prefixToType (colisionaria
+// con holding, que ya usa "00").
 var MDMPrefix = map[EntityType]string{
 	Holding:   "00",
 	Grupo:     "01",
@@ -55,14 +71,19 @@ var MDMPrefix = map[EntityType]string{
 // (2026-09-08) para las primeras 5; "serviceAddress" es el nombre esperado
 // segun el modulo Go (modules/entity/serviceAddress) pero no fue
 // confirmado contra datos reales todavia -- si el pipeline contra esa
-// coleccion no encuentra nada, revisar este nombre primero.
+// coleccion no encuentra nada, revisar este nombre primero. "salesPerson"
+// (agregado 2026-09-28): coleccion real, mismo nombre que el tipo de
+// negocio (a diferencia de las otras 6, que usan un nombre tecnico
+// "serviceX" distinto del alias de negocio) -- confirmado contra
+// entity.go/main.go del repo de Hermes.
 var CollectionName = map[EntityType]string{
-	Holding:   "serviceHolding",
-	Grupo:     "serviceGroup",
-	Cliente:   "serviceEntity",
-	Centro:    "servicePlace",
-	Punto:     "servicePoint",
-	Direccion: "serviceAddress",
+	Holding:     "serviceHolding",
+	Grupo:       "serviceGroup",
+	Cliente:     "serviceEntity",
+	Centro:      "servicePlace",
+	Punto:       "servicePoint",
+	Direccion:   "serviceAddress",
+	SalesPerson: "salesPerson",
 }
 
 // Document representa un documento generico de cualquiera de las 6

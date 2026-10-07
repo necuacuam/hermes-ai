@@ -32,6 +32,14 @@ func validRelations() dictionary.RelationsData {
 			{Campo: "data.customerName", Descripcion: "Razon social de prueba.", Fuente: "fixture de test"},
 		},
 	}
+	rel.CamposDeNombre = map[domain.EntityType][]string{
+		domain.Cliente: {"customerName"},
+		domain.Centro:  {"customerName"},
+	}
+	rel.CamposUtilesSeek = map[domain.EntityType][]string{
+		domain.Cliente: {"taxpayerId"},
+		domain.Centro:  {"taxpayerId"},
+	}
 	return rel
 }
 
@@ -84,8 +92,8 @@ func TestHierarchy_OrigenDatosVacio_DevuelveInstruccionDeNoAdivinar(t *testing.T
 // vacio aca.
 func TestHierarchy_CamposEstructuralesFijos_NoQuedanVacios(t *testing.T) {
 	info := dictionary.Hierarchy(validRelations())
-	if len(info.Jerarquia) != 6 {
-		t.Errorf("se esperaban 6 tipos en Jerarquia, hay %d", len(info.Jerarquia))
+	if len(info.Jerarquia) != 7 {
+		t.Errorf("se esperaban 7 tipos en Jerarquia (las 6 entidades tipo cuenta + salesPerson), hay %d", len(info.Jerarquia))
 	}
 	if info.MecanismoDeRelacion == "" || info.EstructuraDeCampos == "" || info.Direccion == "" || info.OtrasRelaciones == "" {
 		t.Error("ningun campo de texto estructural deberia quedar vacio")
@@ -172,6 +180,8 @@ func TestLoadRelations_CampoObligatorioVacio_Falla(t *testing.T) {
 		{"otrasRelaciones", func(r *dictionary.RelationsData) { r.OtrasRelaciones = "" }},
 		{"anidamiento.estadoActual", func(r *dictionary.RelationsData) { r.Anidamiento.EstadoActual = "" }},
 		{"campos", func(r *dictionary.RelationsData) { r.Campos = nil }},
+		{"camposDeNombre", func(r *dictionary.RelationsData) { r.CamposDeNombre = nil }},
+		{"camposUtilesSeek", func(r *dictionary.RelationsData) { r.CamposUtilesSeek = nil }},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {

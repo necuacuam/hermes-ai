@@ -27,6 +27,12 @@ mantenimiento interno, nunca se le muestra al usuario final.
 La base Mongo a la que apunta es de solo lectura: ningún pipeline puede
 escribir (ver `internal/store/pipeline_guard.go`).
 
+El alcance va a crecer más allá de estas 7 (el universo real de Hermes
+tiene ~25 entidades). Ver `METODOLOGIA-AGREGAR-ENTIDAD.md` para los pasos
+exactos de cada alta nueva -- qué va en código (exige recompilar) y qué va
+en `relaciones/*.json` (no exige recompilar), con el caso real de
+`salesPerson` (2026-09-28) como ejemplo de principio a fin.
+
 ## Tools
 
 - **`diccionario_de_campos`**: traduce nombre de negocio ↔ campo técnico
@@ -102,7 +108,8 @@ está en el paso 6 de "Configurar Claude Desktop" más abajo.
 | `HERMES_MCP_RELACIONES_PATH` | Ruta al fichero de relaciones a cargar (dentro de `relaciones/`) -- ahí vive tanto la estructura de `relacion_entre_entidades` como `origenDatos` (de qué base/entorno viene lo conectado ahora). Ver sección más abajo. | **bloque `env` de `claude_desktop_config.json`** (no `.env`) | **ninguno -- obligatoria** (sin ella, o sin el fichero, el servidor no arranca) |
 | `HERMES_MCP_SALIDAS_DIR` | Carpeta de salida de `reporting` (`guardarEnArchivo=true`). | `.env` | `./salidas` |
 | `HERMES_MCP_LIMITE_PANTALLA_DEFAULT` | Filas máximas en pantalla si no se especifica. | `.env` | `10` |
-| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por pipeline. | `.env` | `30s` |
+| `HERMES_MCP_LIMITE_SEEK` | Candidatos máximos que devuelve `seek`; si hay más, avisa que se recortó. | `.env` | `50` |
+| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por consulta a Mongo (pipelines de `reporting` y búsquedas de `seek`); Mongo también lo recibe como `maxTimeMS`. | `.env` | `30s` |
 
 ## Cómo correrlo
 

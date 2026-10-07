@@ -1,7 +1,7 @@
 package store_test
 
 import (
-	"strings"
+	"encoding/json"
 	"testing"
 
 	"hermes-mcp/internal/store"
@@ -60,27 +60,8 @@ func TestValidatePipeline_OperadorProhibidoAnidado_Rechazado(t *testing.T) {
 	}
 }
 
-func TestValidatePipeline_ClaveDeOperadorConEspacioAntesDelSimbolo_Rechazada(t *testing.T) {
-	// Bug real observado en produccion (2026-09-25): el subagente arma
-	// {"$exists": true} pero con un espacio de mas antes del "$" --
-	// {" $exists": true}. Mongo NO tira error para esto: lo trata como un
-	// nombre de campo literal, y el $match deja de matchear nada (0
-	// resultados en silencio). ValidatePipeline tiene que atajarlo antes de
-	// ejecutar, con un mensaje que ayude a corregirlo.
-	pipeline := []map[string]interface{}{
-		{"$match": map[string]interface{}{"parentUCode": map[string]interface{}{" $exists": true}}},
-	}
-	err := store.ValidatePipeline(pipeline)
-	if err == nil {
-		t.Fatal("se esperaba error -- clave ' $exists' (con espacio) tiene que rechazarse")
-	}
-	if !strings.Contains(err.Error(), "$exists") {
-		t.Errorf("el mensaje de error deberia mencionar la clave real \"$exists\", quedo: %v", err)
-	}
-}
-
 func TestValidatePipeline_ClaveDeOperadorSinEspacio_OK(t *testing.T) {
-	// Caso negativo: el mismo operador bien escrito no debe dispararlo.
+	// Un operador de lectura comun dentro de un $match no se rechaza.
 	pipeline := []map[string]interface{}{
 		{"$match": map[string]interface{}{"parentUCode": map[string]interface{}{"$exists": true}}},
 	}
@@ -166,5 +147,101 @@ func TestValidatePipeline_GraphLookupHaciaColeccionFueraDeAlcance_Rechazado(t *t
 	}
 	if err := store.ValidatePipeline(pipeline); err == nil {
 		t.Error("se esperaba error -- $graphLookup hacia una coleccion fuera de alcance tiene que rechazarse")
+	}
+}
+
+// Sub-pipelines (2026-10-06): hasta esta fecha, la lista blanca de etapas y
+// el control de "from" se aplicaban solo al primer nivel, y estos 4
+// pipelines pasaban la validacion -- dejaban leer cualquier coleccion de la
+// base.
+func TestValidatePipeline_SubPipelinesFueraDeAlcance_Rechazados(t *testing.T) {
+	lookupAjeno := map[string]interface{}{"$lookup": map[string]interface{}{
+		"from": "contract", "localField": "ucode", "foreignField": "accountUniqueId", "as": "contratos",
+	}}
+	unionWith := map[string]interface{}{"$unionWith": "contract"}
+	casos := map[string][]map[string]interface{}{
+		"$lookup ajeno dentro de $facet": {
+			{"$facet": map[string]interface{}{"ramaA": []interface{}{lookupAjeno}}},
+		},
+		"$unionWith dentro de $facet": {
+			{"$facet": map[string]interface{}{"ramaA": []interface{}{unionWith}}},
+		},
+		"$lookup ajeno en el pipeline de un $lookup": {
+			{"$lookup": map[string]interface{}{
+				"from": "servicePlace", "pipeline": []interface{}{lookupAjeno}, "as": "centros",
+			}},
+		},
+		"$unionWith en el pipeline de un $lookup": {
+			{"$lookup": map[string]interface{}{
+				"from": "servicePlace", "pipeline": []interface{}{unionWith}, "as": "centros",
+			}},
+		},
+	}
+	for nombre, pipeline := range casos {
+		if err := store.ValidatePipeline(pipeline); err == nil {
+			t.Errorf("%s: se esperaba error", nombre)
+		}
+	}
+}
+
+func TestValidatePipeline_SubPipelineDentroDelAlcance_OK(t *testing.T) {
+	pipeline := []map[string]interface{}{
+		{"$lookup": map[string]interface{}{
+			"from": "servicePlace",
+			"let":  map[string]interface{}{"p": "$parentUCode"},
+			"pipeline": []interface{}{
+				map[string]interface{}{"$match": map[string]interface{}{"$expr": map[string]interface{}{"$eq": []interface{}{"$ucode", "$$p"}}}},
+				map[string]interface{}{"$lookup": map[string]interface{}{
+					"from": "operativeLevel", "pipeline": []interface{}{}, "as": "clases",
+				}},
+			},
+			"as": "centro",
+		}},
+		{"$facet": map[string]interface{}{
+			"total":  []interface{}{map[string]interface{}{"$count": "n"}},
+			"puntos": []interface{}{map[string]interface{}{"$limit": 10}},
+		}},
+	}
+	if err := store.ValidatePipeline(pipeline); err != nil {
+		t.Errorf("no se esperaba error para sub-pipelines dentro del alcance: %v", err)
+	}
+}
+
+func TestValidatePipeline_SubPipelineQueNoEsLista_Rechazado(t *testing.T) {
+	pipeline := []map[string]interface{}{
+		{"$lookup": map[string]interface{}{
+			"from": "servicePlace", "pipeline": map[string]interface{}{"$match": map[string]interface{}{}}, "as": "c",
+		}},
+	}
+	if err := store.ValidatePipeline(pipeline); err == nil {
+		t.Error("se esperaba error -- un sub-pipeline que no es una lista no se puede validar")
+	}
+}
+
+// Claves repetidas (2026-10-06): el validador ve el ultimo valor de una
+// clave repetida y Mongo ejecuta el texto original -- se rechazan antes.
+func TestValidarClavesUnicas(t *testing.T) {
+	casos := []struct {
+		nombre, pipeline string
+		ok               bool
+	}{
+		{"sin repetidas", `[{"$match":{"a":1,"b":{"c":2}}},{"$facet":{"x":[{"$limit":1}],"y":[{"$limit":2}]}}]`, true},
+		{"misma clave en objetos distintos", `[{"$match":{"a":1}},{"$project":{"a":1}},{"$match":{"b":[{"a":1},{"a":2}]}}]`, true},
+		{"from repetido en $lookup", `[{"$lookup":{"from":"contract","from":"servicePlace","pipeline":[],"as":"x"}}]`, false},
+		{"etapa repetida", `[{"$match":{},"$match":{"a":1}}]`, false},
+		{"repetida dentro de una lista", `[{"$facet":{"x":[{"$lookup":{"from":"contract","from":"servicePlace","as":"c"}}]}}]`, false},
+	}
+	for _, c := range casos {
+		var p []json.RawMessage
+		if err := json.Unmarshal([]byte(c.pipeline), &p); err != nil {
+			t.Fatalf("%s: %v", c.nombre, err)
+		}
+		err := store.ValidarClavesUnicas(p)
+		if c.ok && err != nil {
+			t.Errorf("%s: no se esperaba error: %v", c.nombre, err)
+		}
+		if !c.ok && err == nil {
+			t.Errorf("%s: se esperaba error", c.nombre)
+		}
 	}
 }

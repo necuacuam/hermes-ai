@@ -161,11 +161,11 @@ type HierarchyInfo struct {
 	Jerarquia           []domain.EntityType          `json:"jerarquia"`
 	PrefijosUCode       map[domain.EntityType]string `json:"prefijosUcode"`
 	ColeccionMongo      map[domain.EntityType]string `json:"coleccionMongo"` // nombre real de coleccion -- para armar $lookup en un pipeline
-	MecanismoDeRelacion string                        `json:"mecanismoDeRelacion"`
-	EstructuraDeCampos  string                        `json:"estructuraDeCampos"` // donde viven los campos de negocio -- ver comentario del campo mas abajo
-	Direccion           string                        `json:"direccion"`          // nota aparte sobre por que "direccion" no encaja en la cadena de ParentUCode
-	OtrasRelaciones     string                        `json:"otrasRelaciones"`    // FKs cross-entidad que NO son ucode/parentUCode -- ver Hierarchy()
-	OrigenDatos         string                        `json:"origenDatos"`        // de que base/entorno viene lo conectado AHORA -- ver RelationsData
+	MecanismoDeRelacion string                       `json:"mecanismoDeRelacion"`
+	EstructuraDeCampos  string                       `json:"estructuraDeCampos"` // donde viven los campos de negocio -- ver comentario del campo mas abajo
+	Direccion           string                       `json:"direccion"`          // nota aparte sobre por que "direccion" no encaja en la cadena de ParentUCode
+	OtrasRelaciones     string                       `json:"otrasRelaciones"`    // FKs cross-entidad que NO son ucode/parentUCode -- ver Hierarchy()
+	OrigenDatos         string                       `json:"origenDatos"`        // de que base/entorno viene lo conectado AHORA -- ver RelationsData
 	Anidamiento         struct {
 		SegunCodigoHermes           string `json:"segunCodigoHermes"`
 		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
@@ -219,6 +219,24 @@ type RelationsData struct {
 	// igual que el resto (salvo OrigenDatos) -- sin esto esa tool no tiene
 	// nada que devolver.
 	Campos map[domain.EntityType][]FieldInfo `json:"campos"`
+	// CamposDeNombre: por tipo de entidad, que campos de "data" pueden
+	// contener el nombre de negocio (ver mongostore.pickDisplayName /
+	// FindByNameAndType). MOVIDO ACA 2026-09-28 (pedido por TAvo: estaba
+	// hardcodeado como una lista global en mongostore.go -- "camposUtilesParaSeek"
+	// y "nameFieldCandidates" -- exactamente el tipo de contenido curado a
+	// mano que este archivo lleva documentando desde 2026-09-20 que NO va en
+	// Go). Es lo que antes era el var package-level "nameFieldCandidates" en
+	// mongostore.go, una unica lista compartida por las 6 entidades -- se
+	// mantiene igual (misma lista, ahora por tipo para poder diferir en el
+	// futuro, ej. salesPerson con FirstName/LastName en vez de accountName)
+	// en vez de recompilar el binario para agregar/sacar un campo candidato.
+	CamposDeNombre map[domain.EntityType][]string `json:"camposDeNombre"`
+	// CamposUtilesSeek: por tipo de entidad, que atributos mostrar en un
+	// candidato de "seek" para ayudar a desambiguar (NIF, ubicacion, tipo de
+	// centro/punto, nombre del padre, etc.) en vez del objeto "data"
+	// completo (60+ campos). MOVIDO ACA 2026-09-28 junto con CamposDeNombre
+	// -- antes era "camposUtilesParaSeek" en tools.go, mismo problema.
+	CamposUtilesSeek map[domain.EntityType][]string `json:"camposUtilesSeek"`
 }
 
 // LoadRelations lee y valida el fichero de relaciones -- falla fuerte
@@ -260,6 +278,12 @@ func LoadRelations(path string) (RelationsData, error) {
 	}
 	if len(rel.Campos) == 0 {
 		faltantes = append(faltantes, "campos")
+	}
+	if len(rel.CamposDeNombre) == 0 {
+		faltantes = append(faltantes, "camposDeNombre")
+	}
+	if len(rel.CamposUtilesSeek) == 0 {
+		faltantes = append(faltantes, "camposUtilesSeek")
 	}
 	if len(faltantes) > 0 {
 		return rel, fmt.Errorf("dictionary: fichero de relaciones %q incompleto -- faltan (o vienen vacios): %s", path, strings.Join(faltantes, ", "))

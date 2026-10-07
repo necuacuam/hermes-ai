@@ -206,18 +206,47 @@ func main() {
 		logger.Fatalf("HERMES_MCP_MONGO_URI no esta seteada -- no hay default embebido en el codigo. Configurala en .env (ver .env.example) con la URI real, o seteala explicitamente a vacio ahi mismo para forzar mockstore (datos de prueba, sin pipelines de agregacion).")
 	}
 
+	// HERMES_MCP_RELACIONES_PATH: ruta al fichero de relaciones a cargar,
+	// dentro de la carpeta relaciones/ -- ver dictionary.RelationsData/
+	// LoadRelations y relaciones/relaciones.example.json. Ahi vive tanto la estructura/notas de
+	// negocio de "relacion_entre_entidades" como origenDatos (texto libre,
+	// decidido por quien levanta el servidor, para que el agente sepa de
+	// que base/entorno viene lo conectado AHORA sin tener que asumirlo de
+	// un texto fijo en el prompt -- eso fue justo el bug que motivo esto,
+	// ver dictionary.go/origenDatosNoConfigurado). Obligatoria, mismo
+	// criterio que HERMES_MCP_MONGO_URI: sin el fichero no hay nada util
+	// que devolver, mejor cortar al arrancar con un error claro. A
+	// diferencia de MONGO_URI, esta variable vive en el bloque "env" de
+	// claude_desktop_config.json, NO en ".env" (ver el comentario de
+	// cabecera del archivo y README.md) -- distingue una instalacion de
+	// Claude Desktop de otra, no es config de conexion compartida.
+	//
+	// Se carga ACA, ANTES de construir el MongoStore (2026-09-28) -- porque
+	// MongoStore ahora necesita rel.CamposDeNombre para saber, por tipo de
+	// entidad, en que campos buscar por nombre (ver mongostore.New): ese
+	// dato tambien es contenido de negocio externalizado, ya no un var
+	// hardcodeado en mongostore.go.
+	relacionesPath, relacionesPathSeteada := os.LookupEnv("HERMES_MCP_RELACIONES_PATH")
+	if !relacionesPathSeteada || relacionesPath == "" {
+		logger.Fatalf("HERMES_MCP_RELACIONES_PATH no esta seteada -- hace falta la ruta al fichero de relaciones a cargar. Configurala en el bloque \"env\" de claude_desktop_config.json (ver README.md, \"Configurar Claude Desktop\"), o en la sesion de shell si corres localmente sin Claude Desktop. Copia relaciones/relaciones.example.json a esa ruta antes, completando origenDatos.")
+	}
+	rel, err := dictionary.LoadRelations(resolverRutaConfig(relacionesPath))
+	if err != nil {
+		logger.Fatalf("no se pudo cargar el fichero de relaciones: %v", err)
+	}
+
 	var st store.Store
 	if mongoURI != "" {
 		dbName := os.Getenv("HERMES_MCP_MONGO_DB")
 		if dbName == "" {
 			dbName = "hermes-local"
 		}
-		ms, err := mongostore.New(context.Background(), mongoURI, dbName)
+		ms, err := mongostore.New(context.Background(), mongoURI, dbName, rel.CamposDeNombre)
 		if err != nil {
-			logger.Fatalf("no se pudo conectar a Mongo (%s, db %s): %v", mongoURI, dbName, err)
+			logger.Fatalf("no se pudo conectar a Mongo (%s, db %s): %v", mongostore.URISinClave(mongoURI), dbName, err)
 		}
 		st = ms
-		logger.Printf("arrancando contra Mongo real en %s (db %s)", mongoURI, dbName)
+		logger.Printf("arrancando contra Mongo real en %s (db %s)", mongostore.URISinClave(mongoURI), dbName)
 	} else {
 		st = mockstore.New(mockstore.Fixtures())
 		logger.Printf("HERMES_MCP_MONGO_URI seteada explicitamente a vacio -- arrancando con datos de prueba en memoria (mockstore), SIN pipelines de agregacion. Ver README.md para levantar Mongo local.")
@@ -234,6 +263,18 @@ func main() {
 		}
 	}
 
+	limiteSeek := store.LimiteSeekPorDefecto
+	if raw := os.Getenv("HERMES_MCP_LIMITE_SEEK"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			limiteSeek = v
+		} else {
+			logger.Printf("HERMES_MCP_LIMITE_SEEK=%q invalida (tiene que ser un entero > 0) -- usando el default %d", raw, limiteSeek)
+		}
+	}
+	if ms, ok := st.(*mongostore.MongoStore); ok {
+		ms.SetLimiteSeek(limiteSeek)
+	}
+
 	timeout := timeoutPorDefecto
 	if raw := os.Getenv("HERMES_MCP_MONGO_TIMEOUT"); raw != "" {
 		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
@@ -243,33 +284,10 @@ func main() {
 		}
 	}
 
-	// HERMES_MCP_RELACIONES_PATH: ruta al fichero de relaciones a cargar,
-	// dentro de la carpeta relaciones/ -- ver dictionary.RelationsData/
-	// LoadRelations y relaciones/relaciones.example.json. Ahi vive tanto la estructura/notas de
-	// negocio de "relacion_entre_entidades" como origenDatos (texto libre,
-	// decidido por quien levanta el servidor, para que el agente sepa de
-	// que base/entorno viene lo conectado AHORA sin tener que asumirlo de
-	// un texto fijo en el prompt -- eso fue justo el bug que motivo esto,
-	// ver dictionary.go/origenDatosNoConfigurado). Obligatoria, mismo
-	// criterio que HERMES_MCP_MONGO_URI: sin el fichero no hay nada util
-	// que devolver, mejor cortar al arrancar con un error claro. A
-	// diferencia de MONGO_URI, esta variable vive en el bloque "env" de
-	// claude_desktop_config.json, NO en ".env" (ver el comentario de
-	// cabecera del archivo y README.md) -- distingue una instalacion de
-	// Claude Desktop de otra, no es config de conexion compartida.
-	relacionesPath, relacionesPathSeteada := os.LookupEnv("HERMES_MCP_RELACIONES_PATH")
-	if !relacionesPathSeteada || relacionesPath == "" {
-		logger.Fatalf("HERMES_MCP_RELACIONES_PATH no esta seteada -- hace falta la ruta al fichero de relaciones a cargar. Configurala en el bloque \"env\" de claude_desktop_config.json (ver README.md, \"Configurar Claude Desktop\"), o en la sesion de shell si corres localmente sin Claude Desktop. Copia relaciones/relaciones.example.json a esa ruta antes, completando origenDatos.")
-	}
-	rel, err := dictionary.LoadRelations(resolverRutaConfig(relacionesPath))
-	if err != nil {
-		logger.Fatalf("no se pudo cargar el fichero de relaciones: %v", err)
-	}
-
 	server := mcp.NewServer("hermes-mcp", "0.3.0-pipeline", logger)
-	tools.RegisterAll(server, g, salidasDir, limitePantalla, timeout, rel)
+	tools.RegisterAll(server, g, salidasDir, limitePantalla, limiteSeek, timeout, rel)
 
-	logger.Printf("salidas en %s -- limite de pantalla por defecto %d filas, timeout de pipeline %s", salidasDir, limitePantalla, timeout)
+	logger.Printf("salidas en %s -- limite de pantalla por defecto %d filas, limite de seek %d candidatos, timeout de consulta %s", salidasDir, limitePantalla, limiteSeek, timeout)
 
 	if err := server.Serve(os.Stdin, os.Stdout); err != nil {
 		logger.Fatalf("error fatal: %v", err)

@@ -1,10 +1,9 @@
-// Package tools conecta el protocolo MCP (paquete mcp) con la logica de
-// negocio (dictionary, graph, reporting, store). Registra 4 tools:
-// Diccionario de campos y Relacion entre entidades (estaticas, esquema),
-// Seek (busqueda viva de entidades reales, con desambiguacion), y
-// Reporting (desde 2026-09-11: ejecuta un pipeline de agregacion Mongo ya
-// armado por el subagente -- ya NO exige un rootUcode resuelto de
-// antemano, ver la nota en registerReporting).
+// Package tools conecta el protocolo MCP (paquete mcp) con dictionary,
+// graph, reporting y store. Registra 4 tools: diccionario_de_campos y
+// relacion_entre_entidades (no consultan la base), seek (busqueda de
+// entidades por nombre) y reporting (ejecucion de un pipeline de
+// agregacion). Las descripciones de las tools son el contrato tecnico; como
+// conversar con el usuario lo definen los prompts de los agentes.
 package tools
 
 import (
@@ -26,10 +25,10 @@ import (
 // / HERMES_MCP_MONGO_TIMEOUT) -- se configuran juntos a proposito (ver
 // registerReporting): son los dos topes de recursos de cualquier ejecucion
 // de pipeline.
-func RegisterAll(server *mcp.Server, g *graph.Graph, salidasDir string, limitePantallaDefault int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
+func RegisterAll(server *mcp.Server, g *graph.Graph, salidasDir string, limitePantallaDefault, limiteSeek int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
 	registerDictionary(server, rel)
 	registerRelation(server, rel)
-	registerSeek(server, g)
+	registerSeek(server, g, rel, limiteSeek, pipelineTimeout)
 	registerReporting(server, g, salidasDir, limitePantallaDefault, pipelineTimeout)
 }
 
@@ -40,7 +39,7 @@ func jsonSchema(schema string) json.RawMessage {
 // --- Diccionario de campos ---
 
 type dictionaryArgs struct {
-	Tipo string `json:"tipo"` // "cliente" | "centro" | "punto" | "grupo" | "holding" | "" (todos)
+	Tipo string `json:"tipo"` // "cliente" | "centro" | "punto" | "grupo" | "holding" | "direccion" | "salesPerson" | "" (todos)
 }
 
 func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
@@ -49,15 +48,15 @@ func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
 		"properties": {
 			"tipo": {
 				"type": "string",
-				"description": "Tipo de entidad a consultar: cliente, centro, punto, grupo, holding o direccion. Vacio para ver todos.",
-				"enum": ["", "cliente", "centro", "punto", "grupo", "holding", "direccion"]
+				"description": "Tipo de entidad a consultar: cliente, centro, punto, grupo, holding, direccion o salesPerson. Vacio para ver todos.",
+				"enum": ["", "cliente", "centro", "punto", "grupo", "holding", "direccion", "salesPerson"]
 			}
 		}
 	}`
 
 	server.RegisterTool(
 		"diccionario_de_campos",
-		"Devuelve el significado de negocio de los campos de holding/grupo/cliente/centro/punto/direccion de Hermes -- que campo tecnico corresponde a un concepto de negocio (ej. NIF, tipo de punto, ciudad). Usar antes de armar una consulta cuando no se sabe en que campo vive un dato -- si el concepto que pide el usuario no aparece aca, no inventar un nombre de campo: avisar que falta esa informacion.",
+		"Devuelve, por tipo de entidad, los campos con su nombre tecnico y su significado, segun el fichero de conocimiento cargado. No consulta la base.",
 		jsonSchema(schema),
 		func(raw json.RawMessage) mcp.CallToolResult {
 			var args dictionaryArgs
@@ -75,18 +74,13 @@ func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
 
 // --- Relacion entre entidades ---
 //
-// A proposito esta tool es ESTATICA -- no recibe argumentos de negocio ni
-// toca Mongo. Responde "como se relacionan los TIPOS de entidad entre si"
-// (jerarquia, prefijos de ucode, el mecanismo de ParentUCode, el punto
-// abierto del anidamiento), sourced de la misma info hardcodeada que
-// "diccionario_de_campos" -- el equivalente en chico del "Grafo de
-// entidades Hermes" que en la arquitectura completa mantiene el Agente
-// Generador. Resolver una entidad REAL por nombre (que cliente, que
-// sucursal) es trabajo de la tool "seek", que si toca datos vivos.
+// No recibe argumentos ni consulta la base. Combina el registro tecnico
+// (internal/domain: jerarquia, prefijos, colecciones) con el fichero de
+// conocimiento cargado (relaciones, anidamiento, origen de los datos).
 func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
 	server.RegisterTool(
 		"relacion_entre_entidades",
-		"Devuelve como se relacionan ESTRUCTURALMENTE los tipos de entidad de Hermes (holding/grupo/cliente/centro/punto/direccion): jerarquia, prefijos de ucode, el nombre real de coleccion Mongo de cada tipo (util para armar $lookup en un pipeline de 'reporting'), el mecanismo generico de ParentUCode, la nota sobre por que 'direccion' no encaja en esa cadena, el estado de la duda sobre anidamiento centro-en-centro/punto-en-punto, y de que base/entorno viene lo que esta conectado ahora mismo ('origenDatos', configurado por quien corre el servidor -- consultar ESTE campo, nunca asumir un entorno de memoria, antes de calificar datos como 'de prueba' o de un entorno especifico).",
+		"Devuelve la estructura de las entidades: jerarquia de tipos, prefijos de ucode y coleccion Mongo de cada tipo (del registro tecnico del servidor), y el mecanismo de relacion, otras relaciones, anidamiento y origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base.",
 		jsonSchema(`{"type": "object", "properties": {}}`),
 		func(raw json.RawMessage) mcp.CallToolResult {
 			b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")
@@ -97,35 +91,10 @@ func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
 
 // --- Seek ---
 //
-// Esta es la tool que SI toca datos vivos (Mongo). Reemplaza lo que antes
-// hacia relacion_entre_entidades con ResolvePath, pero redisenada para
-// resolucion de a un nivel por vez con desambiguacion explicita -- ver la
-// conversacion con TAvo: no se puede asumir que el usuario sabe de memoria
-// los nombres exactos de cada nivel, ni que el primer nombre que da es
-// necesariamente del tipo que uno esperaria (podria haber mas de un
-// "Macedonia", o no ser un cliente).
-//
-// Por eso esta tool NO devuelve error ante 0 o varios matches -- devuelve
-// la lista de candidatos (0, 1 o N), con un "breadcrumb" legible para que
-// el agente se lo muestre al usuario y este reconozca o elija.
-//
-// NO es un paso obligatorio antes de "reporting". El camino por defecto es
-// armar el pipeline directamente con el nombre y los filtros ya acordados
-// con el usuario en la conversacion (ej. "cliente Pepito" -> $match por
-// nombre en serviceEntity) y ejecutarlo -- llamar a "seek" antes "por las
-// dudas" en cada consulta es un viaje de mas que casi nunca hace falta.
-// "seek" sirve para DESPUES: si "reporting" da 0 resultados o algo raro
-// (ver el comentario de esa tool sobre como reaccionar a un resultado
-// vacio), o si el usuario mismo pide ver las opciones antes de elegir.
-//
-// Cuando se usa (para diagnosticar, o porque el usuario lo pidio): el tipo
-// que el usuario menciono junto al nombre (ej. "el cliente Pepito") es una
-// expectativa, no un hecho confirmado -- podria tratarse en realidad de un
-// centro o un grupo. Por eso esa llamada va SIN el parametro "tipo",
-// buscando en las 6 entidades; recien se acota por tipo en una segunda
-// llamada si hizo falta desambiguar. Si el candidato encontrado no coincide
-// con el tipo que dijo el usuario, no se asume ni que el usuario se
-// equivoco ni que el dato encontrado es el correcto -- se le pregunta.
+// Consulta la base. Busca por nombre aproximado en todos los tipos de
+// entidad (o en uno, si se da "tipo"), o lista los hijos directos de un
+// ucode. Nunca devuelve error por 0 o varios resultados: devuelve la lista
+// de candidatos, cada uno con su tipo real y un breadcrumb legible.
 type seekArgs struct {
 	Needle     string `json:"needle"`     // texto a buscar en el nombre; vacio = listar TODOS los hijos de padreUcode
 	PadreUcode string `json:"padreUcode"` // opcional: acota la busqueda a los hijos directos de este ucode
@@ -136,25 +105,17 @@ type seekCandidato struct {
 	UCode     string                 `json:"ucode"`
 	Tipo      domain.EntityType      `json:"tipo"`
 	Nombre    string                 `json:"nombre"`
-	Ubicacion string                 `json:"ubicacion"` // breadcrumb legible, ej. "Macedonia > Sucursal 23 (Madrid)"
+	Ubicacion string                 `json:"ubicacion"` // breadcrumb legible: nombres de los ancestros hasta la entidad
 	Atributos map[string]interface{} `json:"atributos,omitempty"`
 }
 
-// atributosCuradosParaSeek se queda con un puñado de campos utiles para
-// desambiguar (NIF, ubicacion, tipo de centro/punto, nombre del grupo/
-// holding padre) en vez de devolver el objeto "data" completo -- en datos
-// reales tiene 60+ campos (ver dictionary.go), y "seek" es una tool de
-// desambiguacion liviana, no un volcado completo de la entidad (para eso
-// esta "reporting").
-var camposUtilesParaSeek = []string{
-	"taxpayerId", "addressCityName", "addressProvinceName", "addressCountry",
-	"centerType", "pointOfServiceType", "customerGroupName", "customerHoldingName",
-	"parentName", "descriptionLevel1", "descriptionLevel2", "streetName", "postalCode",
-}
-
-func atributosCuradosParaSeek(atributos map[string]interface{}) map[string]interface{} {
+// atributosCuradosParaSeek devuelve solo los campos listados para ese tipo
+// en el fichero de conocimiento (dictionary.RelationsData.CamposUtilesSeek),
+// en vez del objeto "data" completo: seek devuelve candidatos livianos, no
+// la entidad entera.
+func atributosCuradosParaSeek(atributos map[string]interface{}, campos []string) map[string]interface{} {
 	out := map[string]interface{}{}
-	for _, campo := range camposUtilesParaSeek {
+	for _, campo := range campos {
 		if v, ok := atributos[campo]; ok && v != "" {
 			out[campo] = v
 		}
@@ -165,29 +126,32 @@ func atributosCuradosParaSeek(atributos map[string]interface{}) map[string]inter
 	return out
 }
 
-func registerSeek(server *mcp.Server, g *graph.Graph) {
+func registerSeek(server *mcp.Server, g *graph.Graph, rel dictionary.RelationsData, limite int, timeout time.Duration) {
+	if limite <= 0 {
+		limite = store.LimiteSeekPorDefecto
+	}
 	schema := `{
 		"type": "object",
 		"properties": {
 			"needle": {
 				"type": "string",
-				"description": "Texto a buscar en el nombre de la entidad (sin distinguir mayusculas/acentos). Si se omite y se da padreUcode, se listan TODOS los hijos directos -- usar esto cuando el usuario no tiene ninguna pista de nombre y necesita ver las opciones para reconocer la que busca."
+				"description": "Texto a buscar en el nombre de la entidad, sin distinguir mayusculas. Sin padreUcode es una expresion regular (ej. '^IKEA', 'PETROGAL|GALP'; los caracteres especiales como '.' o '(' se escapan con '\\' para buscarlos literales) y los acentos cuentan ('Lisboa' no encuentra 'Lisbóa'). Con padreUcode es texto literal y los acentos se ignoran. Si se omite y se da padreUcode, devuelve todos los hijos directos."
 			},
 			"padreUcode": {
 				"type": "string",
-				"description": "Si se da, acota la busqueda a los hijos DIRECTOS de este ucode (para bajar un nivel ya confirmado). Si se omite, busca en TODAS las entidades sin asumir nivel -- usar esto para el primer paso, cuando todavia no se sabe si el nombre que dio el usuario es un cliente, un centro, etc."
+				"description": "Si se da, limita la busqueda a los hijos directos de este ucode. Si se omite, busca en todos los tipos de entidad."
 			},
 			"tipo": {
 				"type": "string",
-				"enum": ["", "holding", "grupo", "cliente", "centro", "punto", "direccion"],
-				"description": "Opcional: acota la busqueda a un tipo de entidad particular. NO usar esto en la primera busqueda solo porque el usuario nombro un tipo (ej. 'el cliente Pepito') -- esa etiqueta es una expectativa del usuario, no un hecho confirmado, y podria ser un centro o un grupo en la practica. Dejar 'tipo' vacio en el primer intento; si aparece exactamente 1 candidato mostrar tambien su tipo real (si difiere del que dijo el usuario, preguntarle si es a ese al que se referia, no asumir en ningun sentido). Usar 'tipo' recien para acotar una segunda busqueda si hizo falta desambiguar."
+				"enum": ["", "holding", "grupo", "cliente", "centro", "punto", "direccion", "salesPerson"],
+				"description": "Opcional: limita la busqueda a un tipo de entidad. Si se omite, busca en todos los tipos."
 			}
 		}
 	}`
 
 	server.RegisterTool(
 		"seek",
-		"Busca entidades REALES de Hermes por nombre aproximado (o lista los hijos directos de una ya resuelta), sin asumir de antemano el tipo ni exigir un nombre exacto. NO es un paso obligatorio antes de 'reporting' -- el camino por defecto es armar el pipeline directamente con el nombre y los filtros ya acordados con el usuario y ejecutarlo. Usar 'seek' para DESPUES: cuando 'reporting' dio 0 resultados o algo inesperado y conviene averiguar por que (¿la entidad no existe con ese nombre? ¿existe pero de otro tipo?), o cuando el usuario mismo pide ver las opciones antes de elegir. Si se usa, la primera llamada va sin 'tipo' (busca en las 6 entidades, porque el tipo que dijo el usuario es su expectativa, no un hecho) -- 'tipo' se usa recien despues para acotar. Devuelve 0, 1 o varios candidatos con su ucode, su tipo real y un 'ubicacion' legible (breadcrumb) -- nunca falla por ambiguedad, esa es informacion para mostrarle al usuario.",
+		fmt.Sprintf("Busca entidades por nombre aproximado, sin exigir el tipo ni un nombre exacto, o lista los hijos directos de una entidad dada. Consulta la base. Devuelve 0, 1 o varios candidatos con su ucode, su tipo real y su ubicacion (breadcrumb); nunca falla por ambiguedad. Devuelve como maximo %d candidatos: si hay mas, la respuesta trae recortado=true y hay que acotar la busqueda (needle mas preciso, tipo o padreUcode). Como hijos solo devuelve entidades vinculadas por parentUCode.", limite),
 		jsonSchema(schema),
 		func(raw json.RawMessage) mcp.CallToolResult {
 			var args seekArgs
@@ -200,7 +164,10 @@ func registerSeek(server *mcp.Server, g *graph.Graph) {
 				return mcp.ErrorResult("hace falta 'needle' y/o 'padreUcode' -- buscar sin ninguno de los dos listaria toda la base, lo cual no tiene sentido para este uso.")
 			}
 
-			ctx := context.Background()
+			// Mismo tope de tiempo que reporting (2026-10-06): antes seek no
+			// tenia ninguno.
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
 			tipo := domain.EntityType(args.Tipo)
 
 			var docs []domain.Document
@@ -214,6 +181,11 @@ func registerSeek(server *mcp.Server, g *graph.Graph) {
 				return mcp.ErrorResult("error buscando: " + err.Error())
 			}
 
+			recortado := len(docs) > limite
+			if recortado {
+				docs = docs[:limite]
+			}
+
 			candidatos := make([]seekCandidato, 0, len(docs))
 			for _, d := range docs {
 				candidatos = append(candidatos, seekCandidato{
@@ -221,14 +193,19 @@ func registerSeek(server *mcp.Server, g *graph.Graph) {
 					Tipo:      d.Type,
 					Nombre:    d.Name,
 					Ubicacion: g.Breadcrumb(ctx, d),
-					Atributos: atributosCuradosParaSeek(d.Attributes),
+					Atributos: atributosCuradosParaSeek(d.Attributes, rel.CamposUtilesSeek[d.Type]),
 				})
 			}
 
-			b, _ := json.MarshalIndent(map[string]interface{}{
+			respuesta := map[string]interface{}{
 				"total":      len(candidatos),
 				"candidatos": candidatos,
-			}, "", "  ")
+			}
+			if recortado {
+				respuesta["recortado"] = true
+				respuesta["aviso"] = fmt.Sprintf("hay mas de %d coincidencias y solo se devuelven %d -- acotar la busqueda con un needle mas preciso, tipo o padreUcode", limite, limite)
+			}
+			b, _ := json.MarshalIndent(respuesta, "", "  ")
 			return mcp.TextResult(string(b))
 		},
 	)
@@ -236,66 +213,19 @@ func registerSeek(server *mcp.Server, g *graph.Graph) {
 
 // --- Reporting ---
 //
-// Ejecuta un pipeline de agregacion Mongo YA ARMADO por el subagente, con
-// ayuda de "diccionario_de_campos" y "relacion_entre_entidades" para saber
-// en que campo/coleccion vive cada cosa -- esta tool no arma nada por su
-// cuenta, solo valida y ejecuta lo que le llega. No exige un ucode raiz
-// resuelto de antemano: el camino por defecto es que el pipeline resuelva
-// el cliente/centro que haga falta con un $match por nombre directamente,
-// usando el nombre y los filtros ya acordados con el usuario en la
-// conversacion -- no hace falta desambiguar con "seek" antes de cada
-// llamada "por las dudas", eso seria un viaje de mas la mayoria de las
-// veces.
+// Ejecuta el pipeline que recibe, sin armar ni completar nada por su
+// cuenta. Antes de ejecutar lo valida store.ValidatePipeline (etapas
+// permitidas, colecciones del alcance y tablas auxiliares habilitadas).
 //
-// Lo que importa es como se reacciona al RESULTADO, no adelantarse:
-//   - 0 documentos: no informar un simple "no se encontro nada" y cortar
-//     ahi. Proponerle al usuario una lista breve de motivos posibles (ej.
-//     "no hay ningun cliente llamado 'Pepito'", "el cliente existe pero no
-//     tiene centros", "tiene centros pero ninguno cumple el resto del
-//     filtro", "el filtro es demasiado estricto") y dejar que el usuario
-//     elija por cual seguir, o pida otra consulta. Para investigar una de
-//     esas lineas (ej. confirmar si "Pepito" existe con otro nombre o tipo)
-//     recien ahi tiene sentido usar "seek" o una version mas laxa del
-//     pipeline -- como diagnostico posterior, no como paso previo.
-//   - Documentos que mezclan mas de una entidad de nombre similar pero
-//     distinta (ej. el $match por "Santander" trajo resultados de dos
-//     clientes reales distintos sin querer): si el pipeline proyecta el
-//     nombre/ucode del cliente en cada fila, esto se nota en el resultado
-//     mismo -- avisarle al usuario en vez de mezclar todo en un solo
-//     listado como si fuera una sola entidad.
-//
-// Si la pregunta del usuario no deja claro que propiedades necesita, el
-// subagente tiene que preguntarle antes de armar el pipeline final -- el
-// usuario tambien puede consultarle al agente el diccionario/las relaciones
-// directamente. Si un campo pedido no existe en "diccionario_de_campos", no
-// se inventa: se informa el problema. Esta tool no puede validar esa
-// disciplina por codigo (no sabe que pidio el usuario), pero su descripcion
-// se lo recuerda al subagente en cada llamada.
-//
-// modo "conteo" (preguntas "cuantos"/"cantidad de"): el pipeline tiene que
-// terminar en algo como $count o un $group equivalente. 0 documentos de
-// vuelta es una respuesta VALIDA (cantidad 0) -- asi es como $count
-// devuelve "no hubo matches" en Mongo, no significa que el pipeline este
-// mal armado. Mas de un documento si es un error (el pipeline tiene que
-// producir un unico valor). Nunca guarda archivo, formato siempre vacio.
+// modo "conteo": el pipeline tiene que terminar en $count o un $group
+// equivalente. 0 documentos equivale a cantidad 0; mas de un documento es
+// un error. Nunca genera archivo.
 //
 // modo "listado": pantalla (recortada a limitePantalla filas, con aviso
-// EXPLICITO si el total real es mayor -- nunca en silencio) y/o archivo
-// JSON (SIEMPRE completo, sin importar el recorte de pantalla -- no hay
-// opcion de CSV, ver el comentario de internal/reporting sobre por que). El
-// nombre final del archivo (con sufijo _1/_2... si ya existia uno igual
-// hoy) solo se sabe DESPUES de escribirlo -- no se le informa al usuario de
-// antemano. La cantidad de filas que devolvio el pipeline SIEMPRE se
-// informa (incluido 0) via totalFilas -- nunca se omite ese dato. Y si el
-// pipeline no devuelve ningun documento, NO se crea archivo aunque se haya
-// pedido guardarEnArchivo -- comunicarle al usuario que no hubo resultados
-// en vez de dar por hecho que algo quedo guardado.
-//
-// Antes de ejecutar, el pipeline pasa por store.ValidatePipeline: solo
-// etapas de agregacion de SOLO LECTURA, nada de $out/$merge/$where/
-// $function, y ningun $lookup/$graphLookup fuera de las 6 colecciones del
-// alcance -- la base de datos real que dio el jefe no se toca nunca, ni se
-// lee nada fuera de lo acordado.
+// explicito si el total es mayor) y/o archivo JSON con el resultado
+// completo. El nombre final del archivo (con sufijo _1/_2... si ya existia)
+// se conoce recien despues de escribirlo. totalFilas siempre se informa,
+// incluido 0. Sin documentos, no se crea archivo.
 //
 // El handler elige uno de tres caminos de ejecucion segun lo que se pidio,
 // para no traer a memoria mas de lo necesario:
@@ -308,17 +238,36 @@ func registerSeek(server *mcp.Server, g *graph.Graph) {
 //     StreamWriter -- el archivo se escribe a medida que llegan los
 //     documentos del cursor (paginado via mongostore.pipelineBatchSize),
 //     sin acumular el resultado completo en memoria de este lado.
+//
 // Todos los caminos corren con un context.WithTimeout(pipelineTimeout) --
 // un pipeline mal armado (ej. un $lookup sin indice contra una coleccion
 // grande) no puede colgar el servidor indefinidamente.
+//
+// Pipeline se recibe como texto crudo por etapa (json.RawMessage) y se
+// ejecuta desde ese texto: decodificarlo a un map perderia el orden de las
+// claves (ej. un $sort por dos campos llegaria a Mongo en orden alfabetico).
+// Solo la validacion usa una copia decodificada a map, porque ahi el orden
+// no importa.
 type reportingArgs struct {
-	ColeccionInicial  string                   `json:"coleccionInicial"`
-	Pipeline          []map[string]interface{} `json:"pipeline"`
-	Modo              string                   `json:"modo"`
-	MostrarEnPantalla bool                     `json:"mostrarEnPantalla"`
-	LimitePantalla    int                      `json:"limitePantalla"`
-	GuardarEnArchivo  bool                     `json:"guardarEnArchivo"`
-	NombreSugerido    string                   `json:"nombreSugerido"`
+	ColeccionInicial  string            `json:"coleccionInicial"`
+	Pipeline          []json.RawMessage `json:"pipeline"`
+	Modo              string            `json:"modo"`
+	MostrarEnPantalla bool              `json:"mostrarEnPantalla"`
+	LimitePantalla    int               `json:"limitePantalla"`
+	GuardarEnArchivo  bool              `json:"guardarEnArchivo"`
+	NombreSugerido    string            `json:"nombreSugerido"`
+}
+
+// etapasParaValidar decodifica cada etapa a map solo para
+// store.ValidatePipeline. Lo que se ejecuta sigue siendo el texto original.
+func etapasParaValidar(pipeline []json.RawMessage) ([]map[string]interface{}, error) {
+	out := make([]map[string]interface{}, len(pipeline))
+	for i, raw := range pipeline {
+		if err := json.Unmarshal(raw, &out[i]); err != nil {
+			return nil, fmt.Errorf("etapa %d: no es un objeto JSON valido: %w", i, err)
+		}
+	}
+	return out, nil
 }
 
 func registerReporting(server *mcp.Server, g *graph.Graph, salidasDir string, limitePantallaDefault int, pipelineTimeout time.Duration) {
@@ -328,41 +277,41 @@ func registerReporting(server *mcp.Server, g *graph.Graph, salidasDir string, li
 		"properties": {
 			"coleccionInicial": {
 				"type": "string",
-				"enum": ["holding", "grupo", "cliente", "centro", "punto", "direccion"],
-				"description": "Tipo de entidad cuya coleccion Mongo es el punto de partida del pipeline (ver 'coleccionMongo' en relacion_entre_entidades para el nombre real de coleccion, util para armar $lookup hacia las otras). Un $lookup/$graphLookup dentro del pipeline tambien puede apuntar a 'operativeLevel' -- el catalogo auxiliar de clase/subclase de punto (ver diccionario_de_campos de punto) -- aunque esa coleccion NO es un valor valido de coleccionInicial, porque no es una entidad tipo cuenta (no tiene ucode/parentUCode)."
+				"enum": ["holding", "grupo", "cliente", "centro", "punto", "direccion", "salesPerson"],
+				"description": "Tipo de entidad cuya coleccion es el punto de partida del pipeline (ver 'coleccionMongo' en relacion_entre_entidades). Las tablas auxiliares habilitadas pueden usarse como destino de $lookup/$graphLookup, no como punto de partida."
 			},
 			"pipeline": {
 				"type": "array",
 				"items": {"type": "object"},
-				"description": "Etapas de agregacion Mongo en orden, cada una un objeto de un solo operador (ej. {\"$match\": {...}}). Armado por el subagente con ayuda de diccionario_de_campos/relacion_entre_entidades -- NO inventar nombres de campo que no esten documentados ahi; si falta informacion, avisar en vez de adivinar. Solo se permiten etapas de LECTURA (sin $out/$merge/$where/$function, ver store.ValidatePipeline) -- la base de datos real nunca se modifica."
+				"description": "Etapas de agregacion Mongo en orden, cada una un objeto de un solo operador (ej. {\"$match\": {...}}). Se lee como Extended JSON: admite $uuid, $binary, $date y $oid. Antes de ejecutar, el servidor valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; si no, devuelve un error que indica la etapa rechazada."
 			},
 			"modo": {
 				"type": "string",
 				"enum": ["listado", "conteo"],
-				"description": "'conteo' para preguntas 'cuantos'/'cantidad de' -- el pipeline debe terminar en $count o un $group equivalente. 0 documentos de vuelta es una respuesta valida (cantidad 0, asi es como Mongo devuelve 'no hubo matches' en un $count) -- mas de un documento si es un error. Nunca guarda archivo, formato siempre vacio. 'listado' para cualquier otra cosa (nombrar, listar, exportar)."
+				"description": "'conteo': el pipeline debe terminar en $count o un $group equivalente; 0 documentos equivale a cantidad 0 y mas de un documento es un error; nunca genera archivo. 'listado': devuelve documentos, en pantalla y/o en archivo."
 			},
 			"mostrarEnPantalla": {
 				"type": "boolean",
-				"description": "true si el usuario quiere ver el resultado en pantalla. Se recorta a 'limitePantalla' filas, avisando explicitamente si el total real es mayor -- nunca se muestra un recorte como si fuera todo el resultado."
+				"description": "true para devolver las filas en la respuesta, recortadas a 'limitePantalla', con aviso explicito si el total es mayor."
 			},
 			"limitePantalla": {
 				"type": "integer",
-				"description": "Filas maximas a mostrar en pantalla si mostrarEnPantalla=true. <=0 usa el default configurado en el servidor (HERMES_MCP_LIMITE_PANTALLA_DEFAULT). Cuando no se guarda archivo, este limite se empuja directo a Mongo (via $limit) -- no se trae de mas para despues recortar."
+				"description": "Filas maximas en la respuesta si mostrarEnPantalla=true. <=0 usa el default configurado en el servidor (HERMES_MCP_LIMITE_PANTALLA_DEFAULT)."
 			},
 			"guardarEnArchivo": {
 				"type": "boolean",
-				"description": "true si el usuario quiere el resultado guardado en un archivo local (siempre JSON, no hay opcion de CSV -- un pipeline de agregacion puede proyectar formas anidadas que no son una tabla). El archivo SIEMPRE lleva el resultado completo, sin importar limitePantalla. Ignorado si modo=conteo. Si el pipeline no devuelve ningun documento, NO se crea archivo aunque esto sea true -- la respuesta trae totalFilas=0 y archivoEscrito vacio; comunicarle eso al usuario en vez de asumir que algo se guardo."
+				"description": "true para guardar el resultado completo en un archivo JSON local, sin importar limitePantalla. Ignorado si modo=conteo. Si el pipeline no devuelve documentos, no se crea archivo: la respuesta trae totalFilas=0 y archivoEscrito vacio."
 			},
 			"nombreSugerido": {
 				"type": "string",
-				"description": "Nombre base para el archivo, decidido por el agente (no hace falta consultarlo con el usuario antes) -- si ya existe un archivo con ese nombre hoy, se le agrega _1, _2, etc. El nombre final se devuelve en la respuesta, recien ahi para comunicarselo al usuario."
+				"description": "Nombre base del archivo. Si ya existe uno con ese nombre en el dia, se le agrega _1, _2, etc. El nombre final viene en la respuesta."
 			}
 		}
 	}`
 
 	server.RegisterTool(
 		"reporting",
-		"Ejecuta un pipeline de agregacion Mongo YA ARMADO por el subagente (con diccionario_de_campos/relacion_entre_entidades) sobre las entidades tipo cuenta (holding/grupo/cliente/centro/punto/direccion). Camino por defecto: armar el pipeline con el nombre y los filtros ya acordados con el usuario (ej. un $match por nombre aproximado) y ejecutarlo directamente -- no hace falta desambiguar con 'seek' antes de cada llamada. Lo que importa es como se reacciona al resultado: si da 0 documentos, no informar un 'no se encontro nada' y cortar -- proponerle al usuario una lista breve de motivos posibles (la entidad no existe con ese nombre, existe pero no cumple el resto del filtro, el filtro es muy estricto, etc.) y dejar que elija por cual seguir (ahi si puede convenir 'seek', como diagnostico, no como paso previo). Si el resultado mezcla sin querer mas de una entidad de nombre similar (ej. dos clientes reales distintos que contienen 'Santander'), avisarlo en vez de presentarlo como un unico listado. No inventar campos que no esten en el diccionario: si falta informacion, decirlo en vez de adivinar. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas con aviso explicito) y/o un archivo JSON completo (no hay CSV). Toda etapa de escritura ($out, $merge) o de codigo arbitrario ($where, $function) es rechazada -- la base real nunca se modifica.",
+		"Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas con aviso explicito) y/o un archivo JSON con el resultado completo.",
 		jsonSchema(schema),
 		func(raw json.RawMessage) mcp.CallToolResult {
 			var args reportingArgs
@@ -382,7 +331,14 @@ func registerReporting(server *mcp.Server, g *graph.Graph, salidasDir string, li
 				return mcp.ErrorResult("el store activo no soporta pipelines de agregacion (esto pasa con mockstore, pensado solo para tests) -- conectar HERMES_MCP_MONGO_URI a un Mongo real.")
 			}
 
-			if err := store.ValidatePipeline(args.Pipeline); err != nil {
+			if err := store.ValidarClavesUnicas(args.Pipeline); err != nil {
+				return mcp.ErrorResult("pipeline rechazado: " + err.Error())
+			}
+			etapas, err := etapasParaValidar(args.Pipeline)
+			if err != nil {
+				return mcp.ErrorResult("pipeline rechazado: " + err.Error())
+			}
+			if err := store.ValidatePipeline(etapas); err != nil {
 				return mcp.ErrorResult("pipeline rechazado: " + err.Error())
 			}
 
@@ -397,7 +353,6 @@ func registerReporting(server *mcp.Server, g *graph.Graph, salidasDir string, li
 			defer cancel()
 
 			var result reporting.Result
-			var err error
 
 			switch {
 			case modo == reporting.ModoConteo:
@@ -414,9 +369,9 @@ func registerReporting(server *mcp.Server, g *graph.Graph, salidasDir string, li
 			case args.MostrarEnPantalla && !args.GuardarEnArchivo:
 				// Solo pantalla: empujar el limite A MONGO en vez de traer
 				// todo. +1 para poder avisar "hay mas" sin un $count aparte.
-				pipelineConLimite := make([]map[string]interface{}, len(args.Pipeline), len(args.Pipeline)+1)
+				pipelineConLimite := make([]json.RawMessage, len(args.Pipeline), len(args.Pipeline)+1)
 				copy(pipelineConLimite, args.Pipeline)
-				pipelineConLimite = append(pipelineConLimite, map[string]interface{}{"$limit": limitePantalla + 1})
+				pipelineConLimite = append(pipelineConLimite, json.RawMessage(fmt.Sprintf(`{"$limit": %d}`, limitePantalla+1)))
 
 				var docs []map[string]interface{}
 				docs, err = runner.RunPipeline(ctx, coleccion, pipelineConLimite)
