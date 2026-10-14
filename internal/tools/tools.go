@@ -132,12 +132,13 @@ func dictionaryHandler(rel dictionary.RelationsData) mcp.ToolHandler {
 // --- Relacion entre entidades ---
 //
 // No recibe argumentos ni consulta la base. Combina el registro tecnico
-// (internal/domain: jerarquia, prefijos, colecciones) con el fichero de
-// conocimiento cargado (relaciones, anidamiento, origen de los datos).
+// (internal/domain: tipos, colecciones, tablas auxiliares) con el fichero de
+// conocimiento cargado (relaciones, estructura de campos, origen de los
+// datos).
 func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
 	server.RegisterTool(
 		"relacion_entre_entidades",
-		"Devuelve la estructura de las entidades: jerarquia de tipos, prefijos de ucode y coleccion Mongo de cada tipo (del registro tecnico del servidor), y el mecanismo de relacion, otras relaciones, anidamiento y origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base.",
+		"Devuelve la estructura de las entidades: tipos, coleccion Mongo de cada tipo y tablas auxiliares habilitadas (del registro tecnico del servidor), y la lista de relaciones (padre, anidamiento, referencia y catalogo, cada una con sus campos de cruce, estado y reglas), la estructura de los documentos, los prefijos de ucode y el origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base.",
 		jsonSchema(`{"type": "object", "properties": {}}`),
 		func(raw json.RawMessage) mcp.CallToolResult {
 			b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")

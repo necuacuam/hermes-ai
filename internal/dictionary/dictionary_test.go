@@ -17,14 +17,13 @@ import (
 func validRelations() dictionary.RelationsData {
 	var rel dictionary.RelationsData
 	rel.OrigenDatos = "subconjunto restaurado de UAT, sept. 2026"
-	rel.MecanismoDeRelacion = "mecanismo de prueba"
 	rel.EstructuraDeCampos = "estructura de prueba"
-	rel.Direccion = "nota de direccion de prueba"
-	rel.OtrasRelaciones = "otras relaciones de prueba"
-	rel.Anidamiento.SegunCodigoHermes = "segun codigo de prueba"
-	rel.Anidamiento.SegunDocumentacionDeNegocio = "segun documentacion de prueba"
-	rel.Anidamiento.Reglas = "reglas de prueba"
 	rel.PrefijosUCode = map[domain.EntityType]string{domain.Cliente: "02", domain.Punto: "04"}
+	rel.Relaciones = []dictionary.Relacion{
+		{Tipo: "padre", Desde: []domain.EntityType{domain.Centro}, Hacia: "cliente", CampoOrigen: "parentUCode", CampoDestino: "ucode", Estado: "confirmado", Reglas: "reglas de prueba", Fuente: "fuente interna de prueba"},
+		{Tipo: "anidamiento", Desde: []domain.EntityType{domain.Cliente, domain.Centro}, CampoOrigen: "data.mainAccountNumber", CampoDestino: "ucode", Estado: "confirmado", Reglas: "reglas de prueba"},
+		{Tipo: "catalogo", Desde: []domain.EntityType{domain.Punto}, Hacia: "operativeLevel", CampoOrigen: "data.additionalFields.itemClass", CampoDestino: "services.level1Code", Estado: "confirmado", Reglas: "reglas de prueba"},
+	}
 	rel.Campos = map[domain.EntityType][]dictionary.FieldInfo{
 		domain.Cliente: {
 			{Campo: "data.customerName", Descripcion: "Razon social de prueba.", Fuente: "fixture de test"},
@@ -79,23 +78,37 @@ func TestHierarchy_OrigenDatosVacio_DevuelveInstruccionDeNoAdivinar(t *testing.T
 	}
 }
 
-// Jerarquia/ColeccionMongo siguen viniendo de internal/domain (no de
-// RelationsData); PrefijosUCode viene del fichero desde 2026-10-07 -- este test es una red de seguridad barata: si
-// alguna vez se agrega un campo nuevo al struct sin llenarlo, salta como
-// vacio aca.
-func TestHierarchy_CamposEstructuralesFijos_NoQuedanVacios(t *testing.T) {
+// Tipos/ColeccionMongo/TablasAuxiliares vienen de internal/domain (no de
+// RelationsData); el resto, del fichero -- red de seguridad barata: si se
+// agrega un campo nuevo al struct sin llenarlo, salta como vacio aca.
+func TestHierarchy_CamposEstructurales_NoQuedanVacios(t *testing.T) {
 	info := dictionary.Hierarchy(validRelations())
-	if len(info.Jerarquia) != 7 {
-		t.Errorf("se esperaban 7 tipos en Jerarquia (las 6 entidades tipo cuenta + salesPerson), hay %d", len(info.Jerarquia))
+	if len(info.Tipos) != len(domain.AllTypes) {
+		t.Errorf("se esperaban %d tipos, hay %d", len(domain.AllTypes), len(info.Tipos))
 	}
-	if info.MecanismoDeRelacion == "" || info.EstructuraDeCampos == "" || info.Direccion == "" || info.OtrasRelaciones == "" {
-		t.Error("ningun campo de texto estructural deberia quedar vacio")
+	if len(info.TablasAuxiliares) != len(domain.TablasAuxiliares) {
+		t.Errorf("TablasAuxiliares = %v, se esperaba el registro %v", info.TablasAuxiliares, domain.TablasAuxiliares)
 	}
-	if info.Anidamiento.Reglas == "" {
-		t.Error("Anidamiento.Reglas no deberia quedar vacio")
+	if info.EstructuraDeCampos == "" {
+		t.Error("EstructuraDeCampos no deberia quedar vacio")
+	}
+	if len(info.Relaciones) != 3 {
+		t.Errorf("se esperaban las 3 relaciones del fixture, hay %d", len(info.Relaciones))
 	}
 	if info.PrefijosUCode[domain.Punto] != "04" {
 		t.Errorf("PrefijosUCode tiene que venir del fichero de relaciones: %v", info.PrefijosUCode)
+	}
+}
+
+// La fuente de una relacion es metadata de mantenimiento: no le llega al
+// agente (igual que la de los campos).
+func TestHierarchy_RelacionesSinFuente(t *testing.T) {
+	b, err := json.Marshal(dictionary.Hierarchy(validRelations()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "fuente") {
+		t.Errorf("la salida de relacion_entre_entidades no deberia traer 'fuente': %s", b)
 	}
 }
 
@@ -110,8 +123,8 @@ func TestLoadRelations_ArchivoValido_CargaTodo(t *testing.T) {
 	if rel.OrigenDatos != "subconjunto restaurado de UAT, sept. 2026" {
 		t.Errorf("OrigenDatos = %q, no coincide con el fixture", rel.OrigenDatos)
 	}
-	if rel.MecanismoDeRelacion != "mecanismo de prueba" {
-		t.Errorf("MecanismoDeRelacion = %q, no coincide con el fixture", rel.MecanismoDeRelacion)
+	if len(rel.Relaciones) != 3 || rel.Relaciones[0].Hacia != "cliente" {
+		t.Errorf("Relaciones = %+v, no coincide con el fixture", rel.Relaciones)
 	}
 }
 
@@ -148,12 +161,8 @@ func TestLoadRelations_JSONInvalido_Falla(t *testing.T) {
 func TestLoadRelations_ClaveDesconocida_Falla(t *testing.T) {
 	raw := `{
 		"origenDatos": "x",
-		"mecanismoDeRelacion": "x",
 		"estructuraDeCampos": "x",
-		"direccion": "x",
-		"otrasRelaciones": "x",
-		"anidamiento": {"segunCodigoHermes": "x", "segunDocumentacionDeNegocio": "x", "reglas": "x"},
-		"prefijosUcode": {"cliente": "02"},
+		"relaciones": [{"tipo": "padre", "desde": ["centro"], "hacia": "cliente", "campoOrigen": "parentUCode", "campoDestino": "ucode", "estado": "confirmado", "reglas": "x"}],
 		"campos": {"cliente": [{"campo": "x", "descripcion": "x", "fuente": "x"}]},
 		"campoQueNoExiste": "typo"
 	}`
@@ -171,12 +180,8 @@ func TestLoadRelations_CampoObligatorioVacio_Falla(t *testing.T) {
 		nombre string
 		mutar  func(*dictionary.RelationsData)
 	}{
-		{"mecanismoDeRelacion", func(r *dictionary.RelationsData) { r.MecanismoDeRelacion = "" }},
 		{"estructuraDeCampos", func(r *dictionary.RelationsData) { r.EstructuraDeCampos = "" }},
-		{"direccion", func(r *dictionary.RelationsData) { r.Direccion = "" }},
-		{"otrasRelaciones", func(r *dictionary.RelationsData) { r.OtrasRelaciones = "" }},
-		{"anidamiento.reglas", func(r *dictionary.RelationsData) { r.Anidamiento.Reglas = "" }},
-		{"prefijosUcode", func(r *dictionary.RelationsData) { r.PrefijosUCode = nil }},
+		{"relaciones", func(r *dictionary.RelationsData) { r.Relaciones = nil }},
 		{"campos", func(r *dictionary.RelationsData) { r.Campos = nil }},
 	}
 	for _, c := range casos {
@@ -188,6 +193,68 @@ func TestLoadRelations_CampoObligatorioVacio_Falla(t *testing.T) {
 				t.Fatalf("se esperaba un error -- %q vacio no deberia pasar la validacion", c.nombre)
 			}
 		})
+	}
+}
+
+// prefijosUcode y general son opcionales desde 2026-10-14.
+func TestLoadRelations_SinPrefijosNiGeneral_NoFalla(t *testing.T) {
+	rel := validRelations()
+	rel.PrefijosUCode = nil
+	rel.General = ""
+	if _, err := dictionary.LoadRelations(writeRelationsFile(t, rel)); err != nil {
+		t.Fatalf("prefijosUcode y general son opcionales: %v", err)
+	}
+}
+
+// Cada relacion se valida contra el registro: un error de tipeo en un tipo,
+// una tabla, el tipo de relacion o el estado impide arrancar.
+func TestLoadRelations_RelacionInvalida_Falla(t *testing.T) {
+	casos := []struct {
+		nombre string
+		mutar  func(*dictionary.Relacion)
+	}{
+		{"desde desconocido", func(r *dictionary.Relacion) { r.Desde = []domain.EntityType{"centros"} }},
+		{"desde vacio", func(r *dictionary.Relacion) { r.Desde = nil }},
+		{"hacia desconocido", func(r *dictionary.Relacion) { r.Hacia = "clientes" }},
+		{"hacia tabla auxiliar en padre", func(r *dictionary.Relacion) { r.Hacia = "operativeLevel" }},
+		{"tipo desconocido", func(r *dictionary.Relacion) { r.Tipo = "hijo" }},
+		{"estado desconocido", func(r *dictionary.Relacion) { r.Estado = "dudoso" }},
+		{"sin campoOrigen", func(r *dictionary.Relacion) { r.CampoOrigen = "" }},
+		{"sin campoDestino", func(r *dictionary.Relacion) { r.CampoDestino = "" }},
+		{"sin reglas", func(r *dictionary.Relacion) { r.Reglas = "" }},
+	}
+	for _, c := range casos {
+		t.Run(c.nombre, func(t *testing.T) {
+			rel := validRelations()
+			c.mutar(&rel.Relaciones[0])
+			if _, err := dictionary.LoadRelations(writeRelationsFile(t, rel)); err == nil {
+				t.Fatalf("se esperaba un error -- %s", c.nombre)
+			}
+		})
+	}
+}
+
+func TestLoadRelations_AnidamientoConHacia_Falla(t *testing.T) {
+	rel := validRelations()
+	rel.Relaciones[1].Hacia = "cliente"
+	if _, err := dictionary.LoadRelations(writeRelationsFile(t, rel)); err == nil {
+		t.Fatal("se esperaba un error -- un anidamiento siempre es al mismo tipo, hacia va vacio")
+	}
+}
+
+func TestLoadRelations_CatalogoHaciaEntidad_Falla(t *testing.T) {
+	rel := validRelations()
+	rel.Relaciones[2].Hacia = "cliente"
+	if _, err := dictionary.LoadRelations(writeRelationsFile(t, rel)); err == nil {
+		t.Fatal("se esperaba un error -- un catalogo tiene que ir a una tabla auxiliar habilitada")
+	}
+}
+
+// Los ficheros versionados (plantillas) tienen que cargar con el formato
+// actual del servidor.
+func TestLoadRelations_PlantillaVersionada_Carga(t *testing.T) {
+	if _, err := dictionary.LoadRelations(filepath.Join("..", "..", "relaciones", "relaciones.example.json")); err != nil {
+		t.Fatalf("relaciones.example.json no carga: %v", err)
 	}
 }
 

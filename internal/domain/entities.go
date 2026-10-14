@@ -26,15 +26,10 @@ const (
 	SalesPerson EntityType = "salesPerson"
 )
 
-// AllTypes lista los 7 tipos (la jerarquia que devuelve
-// relacion_entre_entidades). SalesPerson se agrego 2026-09-28 (7ma entidad, pedido explicito de TAvo)
-// -- va AL FINAL, fuera de la jerarquia holding->grupo->cliente->centro->
-// punto (igual que direccion, que tampoco participa de esa cadena): no
-// tiene parentUCode ni un prefijo MDM fijo (ver prefijosUcode en el fichero de relaciones), asi
-// que no cuelga de nadie ni nadie cuelga de el via ParentUCode -- se
-// relaciona con cliente/grupo/holding por un campo distinto (data.agentId/
-// data.agents, ver relaciones.json/otrasRelaciones), no por la cadena
-// ucode/parentUCode.
+// AllTypes lista los 7 tipos del alcance (los 'tipos' que devuelve
+// relacion_entre_entidades). Como se relacionan entre si no esta aca: lo
+// dice la lista 'relaciones' del fichero de conocimiento (2026-10-14).
+// SalesPerson se agrego 2026-09-28 (7ma entidad).
 var AllTypes = []EntityType{Holding, Grupo, Cliente, Centro, Punto, Direccion, SalesPerson}
 
 // CollectionName mapea cada tipo a su coleccion real en Mongo -- fuente
@@ -51,6 +46,14 @@ var AllTypes = []EntityType{Holding, Grupo, Cliente, Centro, Punto, Direccion, S
 // negocio (a diferencia de las otras 6, que usan un nombre tecnico
 // "serviceX" distinto del alias de negocio) -- confirmado contra
 // entity.go/main.go del repo de Hermes.
+// TablasAuxiliares son colecciones que NO son entidades (no tienen
+// ucode/parentUCode, no pueden ser coleccionInicial) pero que se permite
+// consultar como destino de un $lookup/$graphLookup de solo lectura --
+// catalogos de referencia. Vive en el registro (2026-10-14, antes en
+// store/pipeline_guard.go) porque la usan la validacion de pipelines y la
+// del fichero de conocimiento (relaciones de tipo catalogo).
+var TablasAuxiliares = []string{"operativeLevel"}
+
 var CollectionName = map[EntityType]string{
 	Holding:     "serviceHolding",
 	Grupo:       "serviceGroup",

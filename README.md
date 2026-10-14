@@ -44,8 +44,9 @@ en `relaciones/*.json` (no exige recompilar), con el caso real de
   nombre real de cada colección Mongo y el mecanismo de `parentUCode`.
   También estática (no toca Mongo) -- la jerarquía y las colecciones siguen
   fijas en código (`internal/domain`), porque son lo que limita qué se
-  puede consultar; los prefijos de ucode, el mecanismo de relación, las
-  notas de negocio y `origenDatos` se cargan desde el fichero externo
+  puede consultar; la lista de relaciones (padre, anidamiento, referencia y
+  catálogo), la estructura de los documentos, los prefijos de ucode y
+  `origenDatos` se cargan desde el fichero externo
   (`relaciones/`, ver más abajo).
 - **`reporting`**: ejecuta un pipeline de agregación ya armado (modo
   `conteo` o `listado`, pantalla y/o archivo JSON local). Es el único
@@ -242,11 +243,12 @@ alcance v1). Está fuera del alcance de `hermes-mcp` como entidad
 consultable -- no puede ser `coleccionInicial` de un pipeline -- pero
 **sí se puede consultar en vivo**: `operativeLevel` está habilitada como
 destino de `$lookup`/`$graphLookup` de solo lectura (ver
-`internal/store/pipeline_guard.go`, `coleccionesAuxiliaresPermitidas`),
+`TablasAuxiliares` en `internal/domain/entities.go`),
 típicamente con un `$lookup` sin correlación desde `servicePoint`. El
-mecanismo y la tabla de códigos conocidos quedan además documentados en el
-fichero de relaciones externo (`FieldInfo` de `punto`, ver `relaciones/`
-más abajo) para cuando no haga falta ir a Mongo.
+mecanismo queda además documentado en el
+fichero de relaciones externo (la relación de tipo `catalogo` en
+`relaciones`, ver `relaciones/README.md`); el significado de cada código se
+consulta siempre en Mongo.
 
 Decisión de negocio tomada en esta sesión: **siempre se usa el catálogo
 de Chile (`country: "CL"`) para traducir estos códigos, sin importar el

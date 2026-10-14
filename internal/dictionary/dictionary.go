@@ -134,106 +134,105 @@ func Lookup(campos map[domain.EntityType][]FieldInfo, t domain.EntityType) map[d
 	return map[domain.EntityType][]FieldInfo{}
 }
 
-// HierarchyInfo es la data de como se relacionan estructuralmente los tipos
-// de entidad -- el equivalente, para este proyecto, del "Grafo de entidades
-// Hermes" que en la arquitectura completa genera el Agente Generador
-// (parseando codigo + Excel en cada deploy a PRO) y que se consulta desde
-// SharePoint.
+// Relacion es una relacion entre entidades (o entre una entidad y una tabla
+// auxiliar), tal como la declara el fichero de conocimiento (2026-10-14:
+// antes las relaciones estaban repartidas en varios textos libres --
+// mecanismoDeRelacion, direccion, otrasRelaciones, anidamiento -- y en las
+// descripciones de los campos; ahora cada una es una entrada de esta lista).
 //
-// Jerarquia/ColeccionMongo siguen viniendo de internal/domain (Go
-// compilado): el nombre de coleccion es lo que limita que se puede
-// consultar (ver internal/store y las directivas de diseño, §4) -- no tiene
-// sentido que un archivo externo pueda decir un nombre de coleccion
-// distinto al que el propio codigo usa. PrefijosUCode es conocimiento
-// tecnico del modelo y viene del fichero de relaciones (2026-10-07). El resto (mecanismo de relacion,
-// notas de negocio, origenDatos) es texto libre que SI puede cambiar sin
-// tocar codigo -- ver RelationsData/LoadRelations mas abajo (2026-09-19,
-// evaluado y pedido por TAvo: mantener sincronizados dos binarios,
-// Windows para Claude Desktop y Linux para el spin-off de Open WebUI/Qwen
-// via mcpo, cada vez que cambia una nota de negocio o el origen de datos,
-// era mas trabajo del necesario).
-//
-// A proposito esta tool NO toca Mongo ni datos vivos: la relacion
-// estructural entre TIPOS (que un centro cuelga de un cliente, que existe
-// un campo generico ParentUCode) cambia solo cuando cambia el modelo de
-// Hermes, no con cada alta de un cliente real. Resolver una entidad REAL
-// por nombre (¿existe un cliente llamado 'Macedonia'? ¿cual es su
-// sucursal?) es un trabajo distinto, contra datos vivos -- eso lo hace
-// "reporting".
-type HierarchyInfo struct {
-	Jerarquia           []domain.EntityType          `json:"jerarquia"`
-	PrefijosUCode       map[domain.EntityType]string `json:"prefijosUcode"`
-	ColeccionMongo      map[domain.EntityType]string `json:"coleccionMongo"` // nombre real de coleccion -- para armar $lookup en un pipeline
-	MecanismoDeRelacion string                       `json:"mecanismoDeRelacion"`
-	EstructuraDeCampos  string                       `json:"estructuraDeCampos"` // donde viven los campos de negocio -- ver comentario del campo mas abajo
-	Direccion           string                       `json:"direccion"`          // nota aparte sobre por que "direccion" no encaja en la cadena de ParentUCode
-	OtrasRelaciones     string                       `json:"otrasRelaciones"`    // FKs cross-entidad que NO son ucode/parentUCode -- ver Hierarchy()
-	OrigenDatos         string                       `json:"origenDatos"`        // de que base/entorno viene lo conectado AHORA -- ver RelationsData
-	Anidamiento         struct {
-		SegunCodigoHermes           string `json:"segunCodigoHermes"`
-		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
-		Reglas                      string `json:"reglas"`
-	} `json:"anidamiento"`
+// Desde es una lista para no repetir la misma relacion por cada entidad que
+// la tiene (ej. data.addressCode en cliente, centro y punto). En tipo
+// "anidamiento" Hacia va vacio: siempre es el mismo tipo que el origen.
+// Fuente es metadata de mantenimiento, igual que en FieldInfo: no se le
+// entrega al agente (ver relacionParaAgente).
+type Relacion struct {
+	Tipo         string              `json:"tipo"`
+	Desde        []domain.EntityType `json:"desde"`
+	Hacia        string              `json:"hacia,omitempty"`
+	CampoOrigen  string              `json:"campoOrigen"`
+	CampoDestino string              `json:"campoDestino"`
+	Estado       string              `json:"estado"`
+	Reglas       string              `json:"reglas"`
+	Fuente       string              `json:"fuente,omitempty"`
 }
 
-// RelationsData es el contenido del "fichero de relaciones" externo -- lo
-// que antes vivia hardcodeado en Hierarchy() como texto libre, mas
-// OrigenDatos (que antes era la variable de entorno HERMES_MCP_ORIGEN_DATOS,
-// sacada 2026-09-19 a favor de este mecanismo -- ver HERMES_MCP_RELACIONES_PATH
-// en main.go). Se carga UNA sola vez al arrancar el servidor, desde un
-// archivo dentro de la carpeta relaciones/ que NO se versiona (mismo
-// tratamiento que .env -- ver relaciones/relaciones.example.json, la
-// plantilla que SI se versiona, con OrigenDatos en blanco). Puede haber
-// varios (uno por entorno/release) -- HERMES_MCP_RELACIONES_PATH dice cual
-// cargar.
+// Tipos de Relacion.
+const (
+	RelacionPadre       = "padre"
+	RelacionAnidamiento = "anidamiento"
+	RelacionReferencia  = "referencia"
+	RelacionCatalogo    = "catalogo"
+)
+
+var estadosDeRelacion = map[string]bool{"confirmado": true, "sin confirmar": true, "informativo": true}
+
+// relacionParaAgente es lo que el agente recibe de cada relacion: todo
+// menos Fuente.
+type relacionParaAgente struct {
+	Tipo         string              `json:"tipo"`
+	Desde        []domain.EntityType `json:"desde"`
+	Hacia        string              `json:"hacia,omitempty"`
+	CampoOrigen  string              `json:"campoOrigen"`
+	CampoDestino string              `json:"campoDestino"`
+	Estado       string              `json:"estado"`
+	Reglas       string              `json:"reglas"`
+}
+
+// HierarchyInfo es lo que devuelve relacion_entre_entidades. Tipos,
+// ColeccionMongo y TablasAuxiliares vienen del registro (internal/domain,
+// Go compilado): son lo que limita que se puede consultar (ver
+// internal/store y las directivas de diseño, §4), asi que un archivo
+// externo no puede cambiarlos. El resto viene del fichero de conocimiento.
 //
-// Por que esto y no seguir todo hardcodeado: si cambia una nota de negocio
-// (o el entorno/Mongo conectado), alcanza con reemplazar este archivo y
-// reiniciar el proceso -- no hace falta recompilar ni redistribuir el
-// binario. Eso empieza a importar de verdad ahora que va a haber mas de un
-// binario corriendo (Windows + Linux). La curacion del CONTENIDO (leer el
-// Excel/codigo de Hermes e interpretar que significa cada cosa) sigue
-// siendo 100% trabajo humano -- este mecanismo solo cambia COMO se
-// distribuye el resultado, no quien ni como se genera. El diccionario de
-// campos (antes fieldsByType, hardcodeado en este archivo) TAMBIEN vive
-// aca desde 2026-09-20 (campo Campos, mas abajo) -- mismo mecanismo, misma
-// razon, para las dos tools ("relacion_entre_entidades" y
-// "diccionario_de_campos").
+// A proposito esta tool NO toca Mongo: la relacion entre TIPOS cambia solo
+// cuando cambia el modelo de Hermes. Resolver entidades reales es trabajo
+// de "reporting".
+type HierarchyInfo struct {
+	Tipos              []domain.EntityType          `json:"tipos"`
+	ColeccionMongo     map[domain.EntityType]string `json:"coleccionMongo"` // nombre real de coleccion -- para el "from" de un $lookup
+	TablasAuxiliares   []string                     `json:"tablasAuxiliares"`
+	PrefijosUCode      map[domain.EntityType]string `json:"prefijosUcode,omitempty"`
+	OrigenDatos        string                       `json:"origenDatos"`        // de que base/entorno viene lo conectado AHORA -- ver RelationsData
+	EstructuraDeCampos string                       `json:"estructuraDeCampos"` // que campos estan en la raiz y cuales bajo 'data'
+	General            string                       `json:"general,omitempty"`
+	Relaciones         []relacionParaAgente         `json:"relaciones"`
+}
+
+// RelationsData es el contenido del fichero de conocimiento externo
+// (relaciones/*.json, HERMES_MCP_RELACIONES_PATH en main.go). Se carga una
+// sola vez al arrancar; cambiarlo no exige recompilar, solo reiniciar. Los
+// .json reales no se versionan (mismo tratamiento que .env); la plantilla
+// relaciones/relaciones.example.json si, con OrigenDatos en blanco.
 type RelationsData struct {
-	// OrigenDatos: de que base/entorno viene lo conectado ahora mismo (ej.
-	// "subconjunto restaurado de UAT, sept. 2026"). Puede quedar vacio a
-	// proposito -- ver origenDatosNoConfigurado, la regla de "nunca
-	// adivinar" sigue aplicando igual que antes.
+	// OrigenDatos: de que base/entorno viene lo conectado ahora mismo. Puede
+	// quedar vacio a proposito -- ver origenDatosNoConfigurado.
 	OrigenDatos string `json:"origenDatos"`
-	// El resto son obligatorios (LoadRelations falla si vienen vacios) --
-	// a diferencia de OrigenDatos, no tienen un fallback razonable: sin
-	// esto la tool no tiene nada util que decir.
-	MecanismoDeRelacion string `json:"mecanismoDeRelacion"`
-	EstructuraDeCampos  string `json:"estructuraDeCampos"`
-	Direccion           string `json:"direccion"`
-	OtrasRelaciones     string `json:"otrasRelaciones"`
-	// PrefijosUCode: prefijo de 2 digitos del ucode por tipo (ej. punto
-	// "04"), segun el codigo de Hermes. Obligatorio.
-	PrefijosUCode map[domain.EntityType]string `json:"prefijosUcode"`
-	Anidamiento   struct {
-		SegunCodigoHermes           string `json:"segunCodigoHermes"`
-		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
-		Reglas                      string `json:"reglas"`
-	} `json:"anidamiento"`
+	// EstructuraDeCampos: que campos estan en la raiz del documento y cuales
+	// bajo 'data'. Obligatorio.
+	EstructuraDeCampos string `json:"estructuraDeCampos"`
+	// General: lo que no es una relacion concreta (ej. que vocabulario va en
+	// coleccionInicial y cual en el "from" de un $lookup). Opcional.
+	General string `json:"general,omitempty"`
+	// PrefijosUCode: prefijo de 2 digitos del ucode por tipo, para los tipos
+	// que lo tengan. Opcional (2026-10-14: una entidad sin ucode con prefijo
+	// no lo necesita).
+	PrefijosUCode map[domain.EntityType]string `json:"prefijosUcode,omitempty"`
+	// Relaciones: todas las relaciones entre entidades y con tablas
+	// auxiliares. Obligatorio, y cada entrada se valida contra el registro
+	// (ver validarRelacion).
+	Relaciones []Relacion `json:"relaciones"`
 	// Campos: el diccionario de campos completo por tipo de entidad (la
-	// tool "diccionario_de_campos", ver Lookup mas arriba). Obligatorio
-	// igual que el resto (salvo OrigenDatos) -- sin esto esa tool no tiene
-	// nada que devolver.
+	// tool "diccionario_de_campos", ver Lookup mas arriba). Obligatorio.
 	Campos map[domain.EntityType][]FieldInfo `json:"campos"`
 }
 
 // LoadRelations lee y valida el fichero de relaciones -- falla fuerte
 // (error, no un default silencioso) ante archivo ausente, JSON invalido,
 // una clave desconocida (DisallowUnknownFields: un typo en el JSON no debe
-// pasar inadvertido como "campo con zero value"), o cualquier campo
-// obligatorio vacio salvo OrigenDatos (ver comentario en RelationsData).
-// Mismo espiritu que HERMES_MCP_MONGO_URI en main.go: mejor cortar al
-// arrancar con un mensaje claro que arrancar con datos a medias.
+// pasar inadvertido como "campo con zero value"), un campo obligatorio
+// vacio, o una relacion que nombre un tipo, una tabla, un tipo de relacion
+// o un estado que no existen. Mejor cortar al arrancar con un mensaje claro
+// que arrancar con datos a medias.
 func LoadRelations(path string) (RelationsData, error) {
 	var rel RelationsData
 	f, err := os.Open(path)
@@ -249,23 +248,11 @@ func LoadRelations(path string) (RelationsData, error) {
 	}
 
 	var faltantes []string
-	if rel.MecanismoDeRelacion == "" {
-		faltantes = append(faltantes, "mecanismoDeRelacion")
-	}
 	if rel.EstructuraDeCampos == "" {
 		faltantes = append(faltantes, "estructuraDeCampos")
 	}
-	if rel.Direccion == "" {
-		faltantes = append(faltantes, "direccion")
-	}
-	if rel.OtrasRelaciones == "" {
-		faltantes = append(faltantes, "otrasRelaciones")
-	}
-	if len(rel.PrefijosUCode) == 0 {
-		faltantes = append(faltantes, "prefijosUcode")
-	}
-	if rel.Anidamiento.SegunCodigoHermes == "" || rel.Anidamiento.SegunDocumentacionDeNegocio == "" || rel.Anidamiento.Reglas == "" {
-		faltantes = append(faltantes, "anidamiento.*")
+	if len(rel.Relaciones) == 0 {
+		faltantes = append(faltantes, "relaciones")
 	}
 	if len(rel.Campos) == 0 {
 		faltantes = append(faltantes, "campos")
@@ -273,7 +260,93 @@ func LoadRelations(path string) (RelationsData, error) {
 	if len(faltantes) > 0 {
 		return rel, fmt.Errorf("dictionary: fichero de relaciones %q incompleto -- faltan (o vienen vacios): %s", path, strings.Join(faltantes, ", "))
 	}
+
+	var errores []string
+	for i, r := range rel.Relaciones {
+		if err := validarRelacion(r); err != nil {
+			errores = append(errores, fmt.Sprintf("relaciones[%d]: %v", i, err))
+		}
+	}
+	for t := range rel.PrefijosUCode {
+		if !esTipo(t) {
+			errores = append(errores, fmt.Sprintf("prefijosUcode: %q no es un tipo del registro", t))
+		}
+	}
+	for t := range rel.Campos {
+		if !esTipo(t) {
+			errores = append(errores, fmt.Sprintf("campos: %q no es un tipo del registro", t))
+		}
+	}
+	if len(errores) > 0 {
+		return rel, fmt.Errorf("dictionary: fichero de relaciones %q invalido -- %s", path, strings.Join(errores, "; "))
+	}
 	return rel, nil
+}
+
+func esTipo(t domain.EntityType) bool {
+	for _, x := range domain.AllTypes {
+		if x == t {
+			return true
+		}
+	}
+	return false
+}
+
+func esTablaAuxiliar(nombre string) bool {
+	for _, x := range domain.TablasAuxiliares {
+		if x == nombre {
+			return true
+		}
+	}
+	return false
+}
+
+// validarRelacion comprueba una entrada de 'relaciones' contra el registro:
+// tipo y estado conocidos, origen entre los tipos del alcance, y destino
+// segun el tipo de relacion (un tipo del alcance; una tabla auxiliar si es
+// catalogo; vacio si es anidamiento, que siempre es al mismo tipo).
+func validarRelacion(r Relacion) error {
+	var problemas []string
+	if len(r.Desde) == 0 {
+		problemas = append(problemas, "falta desde")
+	}
+	for _, t := range r.Desde {
+		if !esTipo(t) {
+			problemas = append(problemas, fmt.Sprintf("desde: %q no es un tipo del registro", t))
+		}
+	}
+	switch r.Tipo {
+	case RelacionPadre, RelacionReferencia:
+		if !esTipo(domain.EntityType(r.Hacia)) {
+			problemas = append(problemas, fmt.Sprintf("hacia: %q no es un tipo del registro", r.Hacia))
+		}
+	case RelacionCatalogo:
+		if !esTablaAuxiliar(r.Hacia) {
+			problemas = append(problemas, fmt.Sprintf("hacia: %q no es una tabla auxiliar habilitada", r.Hacia))
+		}
+	case RelacionAnidamiento:
+		if r.Hacia != "" {
+			problemas = append(problemas, "hacia tiene que ir vacio en un anidamiento (siempre es al mismo tipo)")
+		}
+	default:
+		problemas = append(problemas, fmt.Sprintf("tipo %q desconocido (padre, anidamiento, referencia o catalogo)", r.Tipo))
+	}
+	if !estadosDeRelacion[r.Estado] {
+		problemas = append(problemas, fmt.Sprintf("estado %q desconocido (confirmado, sin confirmar o informativo)", r.Estado))
+	}
+	if r.CampoOrigen == "" {
+		problemas = append(problemas, "falta campoOrigen")
+	}
+	if r.CampoDestino == "" {
+		problemas = append(problemas, "falta campoDestino")
+	}
+	if r.Reglas == "" {
+		problemas = append(problemas, "faltan reglas")
+	}
+	if len(problemas) > 0 {
+		return fmt.Errorf("%s", strings.Join(problemas, ", "))
+	}
+	return nil
 }
 
 // origenDatosNoConfigurado es lo que se devuelve en OrigenDatos cuando
@@ -283,25 +356,34 @@ func LoadRelations(path string) (RelationsData, error) {
 // de los agentes va en sus prompts -- directivas de diseño, §2).
 const origenDatosNoConfigurado = "No configurado."
 
-// Hierarchy devuelve la relacion estructural entre los tipos, combinando lo
-// fijo (Jerarquia/ColeccionMongo, de internal/domain) con lo
-// que viene del fichero de relaciones cargado al arrancar (ver
+// Hierarchy arma la respuesta de relacion_entre_entidades: el registro
+// (internal/domain) mas el fichero de conocimiento cargado al arrancar (ver
 // RelationsData, LoadRelations, HERMES_MCP_RELACIONES_PATH en main.go).
 func Hierarchy(rel RelationsData) HierarchyInfo {
 	origen := rel.OrigenDatos
 	if origen == "" {
 		origen = origenDatosNoConfigurado
 	}
-	info := HierarchyInfo{
-		Jerarquia:           domain.AllTypes,
-		PrefijosUCode:       rel.PrefijosUCode,
-		ColeccionMongo:      domain.CollectionName,
-		OrigenDatos:         origen,
-		MecanismoDeRelacion: rel.MecanismoDeRelacion,
-		EstructuraDeCampos:  rel.EstructuraDeCampos,
-		Direccion:           rel.Direccion,
-		OtrasRelaciones:     rel.OtrasRelaciones,
+	relaciones := make([]relacionParaAgente, len(rel.Relaciones))
+	for i, r := range rel.Relaciones {
+		relaciones[i] = relacionParaAgente{
+			Tipo:         r.Tipo,
+			Desde:        r.Desde,
+			Hacia:        r.Hacia,
+			CampoOrigen:  r.CampoOrigen,
+			CampoDestino: r.CampoDestino,
+			Estado:       r.Estado,
+			Reglas:       r.Reglas,
+		}
 	}
-	info.Anidamiento = rel.Anidamiento
-	return info
+	return HierarchyInfo{
+		Tipos:              domain.AllTypes,
+		ColeccionMongo:     domain.CollectionName,
+		TablasAuxiliares:   domain.TablasAuxiliares,
+		PrefijosUCode:      rel.PrefijosUCode,
+		OrigenDatos:        origen,
+		EstructuraDeCampos: rel.EstructuraDeCampos,
+		General:            rel.General,
+		Relaciones:         relaciones,
+	}
 }

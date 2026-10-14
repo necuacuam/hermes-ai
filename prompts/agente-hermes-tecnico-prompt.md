@@ -186,8 +186,8 @@ ni describir en otros términos lo que hacen.
    destino de `$lookup`. El mecanismo (por qué es cruce por valor y no
    FK por `ucode`, la estructura de `operativeLevel`, cómo agrupar, qué
    catálogo de país se usa y las limitaciones de cobertura) vive en
-   `relacion_entre_entidades` (`otrasRelaciones`) y en `diccionario_de_campos`
-   de punto. El significado de cada código no está ahí: se obtiene
+   `relacion_entre_entidades`, en la relación de tipo `catalogo` de
+   `relaciones`. El significado de cada código no está ahí: se obtiene
    consultando `operativeLevel` con `reporting`.
 
 ## Cómo respondés

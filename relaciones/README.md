@@ -34,40 +34,62 @@ cada arranque.
 
 ```jsonc
 {
-  "origenDatos": "texto libre. Único campo OPCIONAL — puede ir vacío.",
-
-  // Los siguientes son OBLIGATORIOS: si falta alguno o viene vacío,
-  // el servidor no arranca.
-  "mecanismoDeRelacion": "texto libre",
-  "estructuraDeCampos": "texto libre",
-  "direccion": "texto libre",
-  "otrasRelaciones": "texto libre",
+  // OPCIONALES: pueden faltar o ir vacíos.
+  "origenDatos": "texto libre: de qué base/entorno vienen los datos",
+  "general": "texto libre: lo que no es una relación concreta",
   "prefijosUcode": { "holding": "00", "grupo": "01", "...": "..." },
-  "anidamiento": {
-    "segunCodigoHermes": "texto libre",
-    "segunDocumentacionDeNegocio": "texto libre",
-    "reglas": "texto libre"
-  },
 
-  // Ningun texto lleva contenido de la base (conteos, valores observados,
-  // copias de catalogos, ejemplos con datos reales) -- directivas, §4.
-
-  // También obligatorio (no puede faltar ni venir vacío).
+  // OBLIGATORIOS: si falta alguno o viene vacío, el servidor no arranca.
+  "estructuraDeCampos": "texto libre: qué campos están en la raíz y cuáles bajo 'data'",
+  "relaciones": [
+    {
+      "tipo": "padre | anidamiento | referencia | catalogo",
+      "desde": ["centro"],
+      "hacia": "cliente",
+      "campoOrigen": "parentUCode",
+      "campoDestino": "ucode",
+      "estado": "confirmado | sin confirmar | informativo",
+      "reglas": "texto libre: los matices de la relación",
+      "fuente": "metadata interna, no se le entrega al agente (opcional)"
+    }
+  ],
   "campos": {
     "holding": [ { "campo": "...", "descripcion": "...", "fuente": "..." } ],
     "grupo":    [ ... ],
-    "cliente":  [ ... ],
-    "centro":   [ ... ],
-    "punto":    [ ... ],
-    "direccion": [ ... ]
+    "...":      [ ... ]
   }
+
+  // Ningún texto lleva contenido de la base (conteos, valores observados,
+  // copias de catálogos, ejemplos con datos reales) -- directivas, §4.
 }
 ```
 
+Notas sobre `relaciones` (una entrada por relación, 2026-10-14):
+
+- `tipo`: `padre` (la cadena por `parentUCode`), `anidamiento` (una
+  entidad dentro de otra del mismo tipo), `referencia` (cualquier otra FK
+  entre entidades) o `catalogo` (cruce con una tabla auxiliar).
+- `desde`: lista de tipos de entidad que tienen la relación — así una
+  relación igual en varias entidades (por ejemplo `data.addressCode`) se
+  escribe una sola vez.
+- `hacia`: un tipo de entidad; en `catalogo`, una tabla auxiliar
+  habilitada; en `anidamiento` va vacío, porque siempre es al mismo tipo.
+- `campoOrigen` / `campoDestino`: los campos del cruce, listos para un
+  `$lookup`.
+- `estado`: `confirmado`, `sin confirmar` o `informativo` (existe, pero
+  no sirve para recorrer).
+- `reglas`: todo matiz de la relación (cuándo viene vacío, qué rechaza
+  Hermes, cómo se resuelve si no se puede con un `$lookup`).
+- Al arrancar, el servidor valida cada relación contra el registro del
+  código: tipos de entidad, tablas auxiliares, tipo de relación y estado.
+  Un error de tipeo impide arrancar.
+- Las descripciones de los campos dicen solo qué significa el campo; la
+  relación se describe una sola vez, acá.
+
 Notas sobre `campos`:
 
-- Las 6 claves (`holding`, `grupo`, `cliente`, `centro`, `punto`,
-  `direccion`) son los tipos de entidad de Hermes.
+- Las claves son los tipos de entidad del registro (`holding`, `grupo`,
+  `cliente`, `centro`, `punto`, `direccion`, `salesPerson`).
 - Cada elemento de la lista es un campo documentado: `campo` es el nombre
   técnico tal como vive en Mongo (con el prefijo `data.` cuando
   corresponde — todo salvo `ucode`/`parentUCode` vive anidado ahí),

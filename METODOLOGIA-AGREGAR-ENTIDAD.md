@@ -4,7 +4,7 @@ Este documento existe porque el alcance va a crecer: hoy hay 7 entidades
 (holding/grupo/cliente/centro/punto/dirección/salesPerson), pero el universo
 real de Hermes tiene ~25. Cada alta nueva debe seguir estos mismos pasos,
 en este orden, para no repetir la investigación a ciegas que costó resolver
-`salesPerson` (ver `relaciones.json`, `otrasRelaciones`, para el caso real).
+`salesPerson` (ver `relaciones.json`, las relaciones hacia `salesPerson`, para el caso real).
 
 Principio rector (no negociable, ya establecido en `dictionary.go` y
 reforzado el 2026-09-28): **lo técnico/estructural vive en Go y exige
@@ -65,8 +65,8 @@ Elegir el nombre en español/alias de negocio que va a usar `coleccionInicial`
 y los demás parámetros (ej. `salesPerson`, no `service...`). Si el nombre
 técnico de colección Mongo coincide con el alias de negocio (como pasó con
 `salesPerson`, a diferencia de las 6 originales que usan `serviceX`), decirlo
-explícitamente en `mecanismoDeRelacion` para no repetir la confusión de
-vocabulario ya documentada ahí.
+explícitamente en `general` para no repetir la confusión de vocabulario ya
+documentada ahí.
 
 ## Paso 2 — Cambios de código (una vez por entidad, exige recompilar)
 
@@ -81,13 +81,13 @@ WebUI). Después de este paso, todo lo demás es edición de JSON.
      el medio si sí participa).
    - Agregarla a `CollectionName` (nombre real de colección Mongo,
      confirmado en el Paso 0).
-2. **`internal/tools/tools.go`**: agregar el alias de negocio a los 2
-   `enum` de los schemas JSON (`dictionaryArgs.tipo`,
-   `reportingArgs.coleccionInicial`). Son strings literales, no se leen de
-   `relaciones.json` — si falta acá, el servidor rechaza la entidad aunque
-   esté perfectamente documentada en el JSON. Ajustar las descripciones de
-   las 3 tools si la entidad nueva tiene una particularidad relevante (ej.
-   "no tiene padre/hijos", igual que se hizo para salesPerson).
+   - Si lo que se agrega es una tabla auxiliar (catálogo, no entidad), va
+     en `TablasAuxiliares` en vez de los tres puntos de arriba.
+2. **`internal/tools/tools.go`**: normalmente NO hace falta tocarlo — los
+   `enum` de los schemas (`tipo` de `diccionario_de_campos`,
+   `coleccionInicial` de `reporting`) se arman desde `domain.AllTypes`
+   (2026-10-14). Solo ajustar las descripciones de las 3 tools si la
+   entidad nueva tiene una particularidad relevante.
 3. **`internal/store/pipeline_guard.go`**: normalmente NO hace falta
    tocarlo — `coleccionesPermitidas` se arma automáticamente a partir de
    `domain.CollectionName`. Solo tocar si la entidad nueva tiene una regla
@@ -124,11 +124,12 @@ Editar los 5 ficheros de relaciones (ver lista al final) con las mismas
    **SOLO SI** confirmaste que la entidad lo usa (no la tabla estática de
    `entity.go`, que puede mentir — ver Paso 0.1). Si usa `UCODE_FREE` o no
    tiene prefijo fijo, no se agrega (como salesPerson).
-3. **`otrasRelaciones`**: agregar un ítem numerado nuevo describiendo cómo
-   se vincula la entidad nueva con las demás — SOLO si se confirmó contra
-   datos reales (ver Paso 4). Si la relación es una hipótesis sin confirmar,
-   decirlo explícitamente ("NO CONFIRMADO", "hipótesis descartada: X, Y") en
-   vez de presentarla como un hecho — el caso de `salesPerson.data.agentId`
+3. **`relaciones`**: agregar una entrada por cada relación de la entidad
+   nueva con las demás (`tipo`, `desde`, `hacia`, `campoOrigen`,
+   `campoDestino`, `estado`, `reglas`, `fuente`). Si la relación es una
+   hipótesis sin confirmar, va con `estado: "sin confirmar"` y las reglas lo
+   dicen explícitamente; las hipótesis descartadas van en `fuente`, en vez
+   de presentarse como un hecho — el caso de `salesPerson.data.agentId`
    (se probó contra `ucode`, `salesOfficeId`, `id`, `parentUCode` antes de
    confirmar que era `uuid`) es el ejemplo de por qué importa dejar el
    rastro de lo descartado, no solo el resultado final.
@@ -142,14 +143,14 @@ Editar los 5 ficheros de relaciones (ver lista al final) con las mismas
 2. Probar las 3 tools con la entidad nueva:
    - `diccionario_de_campos` con `tipo:"<entidad>"` — confirmar que
      devuelve los campos esperados.
-   - `relacion_entre_entidades` — confirmar que aparece en `jerarquia`/
-     `coleccionMongo` y que la nota nueva en `otrasRelaciones` se lee bien.
+   - `relacion_entre_entidades` — confirmar que aparece en `tipos`/
+     `coleccionMongo` y que sus entradas nuevas en `relaciones` se leen bien.
    - `reporting` con `coleccionInicial:"<entidad>"` y un `$match` real sobre
      un campo de `data.*` documentado — confirmar que la validación del
      primer `$match` (prefijo `data.`) no rechaza un campo real por mala
      suerte de nomenclatura (ver el caveat que se agregó en
      `pipeline_guard.go` para este caso).
-3. Si se documentó una relación cross-entidad nueva en `otrasRelaciones`,
+3. Si se documentó una relación cross-entidad nueva en `relaciones`,
    confirmarla armando un pipeline real que la explote (ej. un `$lookup` o,
    si la conversión de tipos no lo permite como pasó con `salesPerson.uuid`,
    un cruce manual fuera de Mongo) — no alcanza con que "suene razonable".

@@ -85,14 +85,16 @@ import (
 	"hermes-mcp/internal/domain"
 )
 
-// coleccionesAuxiliaresPermitidas son colecciones que NO son entidades tipo
-// cuenta (no tienen ucode/parentUCode, no pueden ser coleccionInicial) pero
-// que se permite consultar como destino de un $lookup/$graphLookup de solo
-// lectura -- catalogos de referencia externos al grafo de las 6 entidades.
-// Ver la nota fechada 2026-09-15 en el comentario del paquete.
-var coleccionesAuxiliaresPermitidas = map[string]bool{
-	"operativeLevel": true,
-}
+// coleccionesAuxiliaresPermitidas son las tablas auxiliares del registro
+// (domain.TablasAuxiliares) -- ver la nota fechada 2026-09-15 en el
+// comentario del paquete.
+var coleccionesAuxiliaresPermitidas = func() map[string]bool {
+	m := map[string]bool{}
+	for _, coll := range domain.TablasAuxiliares {
+		m[coll] = true
+	}
+	return m
+}()
 
 // coleccionesPermitidas son los unicos nombres de coleccion Mongo a los que
 // un pipeline puede referirse como "from" de $lookup/$graphLookup --
