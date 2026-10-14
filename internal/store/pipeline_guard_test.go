@@ -2,8 +2,10 @@ package store_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
+	"hermes-mcp/internal/domain"
 	"hermes-mcp/internal/store"
 )
 
@@ -256,5 +258,24 @@ func TestValidatePipeline_Skip_Rechazado(t *testing.T) {
 		if err := store.ValidatePipeline(p); err == nil {
 			t.Errorf("caso %d: se esperaba error por $skip", i)
 		}
+	}
+}
+
+// El error de "from" no permitido lista las colecciones del registro, no
+// una lista escrita a mano.
+func TestFromNoPermitidoListaColeccionesDelRegistro(t *testing.T) {
+	err := store.ValidatePipeline([]map[string]interface{}{
+		{"$lookup": map[string]interface{}{"from": "otraColeccion", "localField": "a", "foreignField": "b", "as": "c"}},
+	})
+	if err == nil {
+		t.Fatal("se esperaba error por from no permitido")
+	}
+	for _, t2 := range domain.AllTypes {
+		if !strings.Contains(err.Error(), domain.CollectionName[t2]) {
+			t.Errorf("el error no menciona %s: %v", domain.CollectionName[t2], err)
+		}
+	}
+	if !strings.Contains(err.Error(), "operativeLevel") {
+		t.Errorf("el error no menciona operativeLevel: %v", err)
 	}
 }

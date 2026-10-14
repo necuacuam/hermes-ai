@@ -35,28 +35,64 @@ func jsonSchema(schema string) json.RawMessage {
 	return json.RawMessage(schema)
 }
 
+// tiposEnumJSON arma el "enum" de los schemas desde domain.AllTypes, para
+// que sumar una entidad al registro no exija tocar las tools a mano
+// (2026-10-14: antes la lista estaba escrita en cada schema). conVacio
+// agrega "" al principio (diccionario_de_campos: vacio = todos).
+func tiposEnumJSON(conVacio bool) string {
+	vals := []string{}
+	if conVacio {
+		vals = append(vals, "")
+	}
+	for _, t := range domain.AllTypes {
+		vals = append(vals, string(t))
+	}
+	b, _ := json.Marshal(vals)
+	return string(b)
+}
+
+// tiposTexto lista los tipos para una descripcion: "a, b, ... o z".
+func tiposTexto() string {
+	n := len(domain.AllTypes)
+	nombres := make([]string, n)
+	for i, t := range domain.AllTypes {
+		nombres[i] = string(t)
+	}
+	if n < 2 {
+		return strings.Join(nombres, "")
+	}
+	return strings.Join(nombres[:n-1], ", ") + " o " + nombres[n-1]
+}
+
 // --- Diccionario de campos ---
 
 type dictionaryArgs struct {
-	Tipo string `json:"tipo"` // "cliente" | "centro" | "punto" | "grupo" | "holding" | "direccion" | "salesPerson" | "" (todos)
+	Tipo string `json:"tipo"` // un tipo de domain.AllTypes, o "" (todos)
 }
 
-func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
-	schema := `{
+// dictionarySchema arma el schema de diccionario_de_campos con los tipos
+// del registro (domain.AllTypes).
+func dictionarySchema() json.RawMessage {
+	return jsonSchema(strings.NewReplacer(
+		"{{TIPOS_TEXTO}}", tiposTexto(),
+		"{{TIPOS_ENUM}}", tiposEnumJSON(true),
+	).Replace(`{
 		"type": "object",
 		"properties": {
 			"tipo": {
 				"type": "string",
-				"description": "Tipo de entidad a consultar: cliente, centro, punto, grupo, holding, direccion o salesPerson. Vacio para ver todos.",
-				"enum": ["", "cliente", "centro", "punto", "grupo", "holding", "direccion", "salesPerson"]
+				"description": "Tipo de entidad a consultar: {{TIPOS_TEXTO}}. Vacio para ver todos.",
+				"enum": {{TIPOS_ENUM}}
 			}
 		}
-	}`
+	}`))
+}
 
+func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
 	server.RegisterTool(
 		"diccionario_de_campos",
 		"Devuelve, por tipo de entidad, los campos con su nombre tecnico y su significado, segun el fichero de conocimiento cargado. No consulta la base.",
-		jsonSchema(schema),
+		dictionarySchema(),
 		dictionaryHandler(rel),
 	)
 }
@@ -172,15 +208,19 @@ func etapasParaValidar(pipeline []json.RawMessage) ([]map[string]interface{}, er
 }
 
 // reportingSchema arma el schema de la tool con el limite de pantalla
-// real, para que el agente lo vea en la descripcion de mostrarEnPantalla.
+// real, para que el agente lo vea en la descripcion de mostrarEnPantalla, y
+// con los tipos de coleccionInicial tomados del registro (domain.AllTypes).
 func reportingSchema(limitePantalla int) json.RawMessage {
-	return jsonSchema(strings.ReplaceAll(`{
+	return jsonSchema(strings.NewReplacer(
+		"{{LIMITE}}", strconv.Itoa(limitePantalla),
+		"{{TIPOS_ENUM}}", tiposEnumJSON(false),
+	).Replace(`{
 		"type": "object",
 		"required": ["coleccionInicial", "pipeline", "modo"],
 		"properties": {
 			"coleccionInicial": {
 				"type": "string",
-				"enum": ["holding", "grupo", "cliente", "centro", "punto", "direccion", "salesPerson"],
+				"enum": {{TIPOS_ENUM}},
 				"description": "Tipo de entidad cuya coleccion es el punto de partida del pipeline (ver 'coleccionMongo' en relacion_entre_entidades). Las tablas auxiliares habilitadas pueden usarse como destino de $lookup/$graphLookup, no como punto de partida."
 			},
 			"pipeline": {
@@ -206,7 +246,7 @@ func reportingSchema(limitePantalla int) json.RawMessage {
 				"description": "Nombre base del archivo. Si ya existe uno con ese nombre en el dia, se le agrega _1, _2, etc. El nombre final viene en la respuesta."
 			}
 		}
-	}`, "{{LIMITE}}", strconv.Itoa(limitePantalla)))
+	}`))
 }
 
 func registerReporting(server *mcp.Server, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) {

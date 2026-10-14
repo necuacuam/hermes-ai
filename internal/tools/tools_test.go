@@ -100,3 +100,33 @@ func TestDiccionario_NoEntregaFuente(t *testing.T) {
 		}
 	}
 }
+
+// Los enums de tipos salen de domain.AllTypes: si se suma una entidad al
+// registro, las tools la aceptan sin tocarlas a mano.
+func TestSchemasTiposDesdeRegistro(t *testing.T) {
+	enumDe := func(t *testing.T, schema json.RawMessage, prop string) []string {
+		t.Helper()
+		var s struct {
+			Properties map[string]struct {
+				Enum []string `json:"enum"`
+			} `json:"properties"`
+		}
+		if err := json.Unmarshal(schema, &s); err != nil {
+			t.Fatalf("schema no es JSON valido: %v", err)
+		}
+		return s.Properties[prop].Enum
+	}
+	var esperado []string
+	for _, tp := range domain.AllTypes {
+		esperado = append(esperado, string(tp))
+	}
+
+	rep := enumDe(t, reportingSchema(10), "coleccionInicial")
+	if strings.Join(rep, ",") != strings.Join(esperado, ",") {
+		t.Errorf("enum de coleccionInicial = %v, esperado %v", rep, esperado)
+	}
+	dic := enumDe(t, dictionarySchema(), "tipo")
+	if strings.Join(dic, ",") != ","+strings.Join(esperado, ",") {
+		t.Errorf("enum de tipo = %v, esperado \"\" + %v", dic, esperado)
+	}
+}

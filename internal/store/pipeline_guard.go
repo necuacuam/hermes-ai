@@ -79,6 +79,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 
 	"hermes-mcp/internal/domain"
 )
@@ -105,6 +107,26 @@ var coleccionesPermitidas = func() map[string]bool {
 		m[coll] = true
 	}
 	return m
+}()
+
+// coleccionesDeEntidadesTexto y coleccionesAuxiliaresTexto arman, desde el
+// registro, la lista que se muestra en el error de "from" no permitido
+// (2026-10-14: antes estaba escrita a mano en el mensaje).
+var coleccionesDeEntidadesTexto = func() string {
+	nombres := make([]string, len(domain.AllTypes))
+	for i, t := range domain.AllTypes {
+		nombres[i] = domain.CollectionName[t]
+	}
+	return strings.Join(nombres, ", ")
+}()
+
+var coleccionesAuxiliaresTexto = func() string {
+	nombres := make([]string, 0, len(coleccionesAuxiliaresPermitidas))
+	for coll := range coleccionesAuxiliaresPermitidas {
+		nombres = append(nombres, coll)
+	}
+	sort.Strings(nombres)
+	return strings.Join(nombres, ", ")
 }()
 
 // allowedStages son las etapas de agregacion que este proyecto permite
@@ -257,7 +279,7 @@ func validarColeccionDestino(stageBody interface{}) error {
 		return nil
 	}
 	if !coleccionesPermitidas[fromStr] {
-		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las 7 entidades del alcance (serviceHolding, serviceGroup, serviceEntity, servicePlace, servicePoint, serviceAddress, salesPerson) o hacia una coleccion auxiliar habilitada explicitamente (operativeLevel)", fromStr)
+		return fmt.Errorf("\"from\": %q no es una de las colecciones permitidas -- solo se puede hacer $lookup/$graphLookup hacia las %d entidades del alcance (%s) o hacia una coleccion auxiliar habilitada explicitamente (%s)", fromStr, len(domain.AllTypes), coleccionesDeEntidadesTexto, coleccionesAuxiliaresTexto)
 	}
 	return nil
 }

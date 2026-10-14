@@ -94,7 +94,7 @@ func (s *Server) handle(req Request) *Response {
 			ProtocolVersion: "2025-06-18",
 			Capabilities:    ServerCapabilities{Tools: &ToolsCapability{ListChanged: false}},
 			ServerInfo:      ServerInfo{Name: s.name, Version: s.version},
-			Instructions:    "Servidor MCP de entidades Hermes tipo cuenta (holding/grupo/cliente/centro/punto/direccion). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo.",
+			Instructions:    "Servidor MCP de entidades Hermes tipo cuenta (holding/grupo/cliente/centro/punto/direccion) y vendedores (salesPerson). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo.",
 		}
 		return s.ok(req, result)
 
