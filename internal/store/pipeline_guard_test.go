@@ -9,11 +9,8 @@ import (
 	"hermes-mcp/internal/store"
 )
 
-// Estos tests no existian hasta la revision del 2026-09-11 -- se agregan
-// porque ValidatePipeline es la unica barrera entre un pipeline armado por
-// un LLM y la base real del jefe ("no se toca en ningun momento"). Es la
-// pieza mas critica de seguridad de todo el redisenio de "reporting" y no
-// tenia ni un test.
+// ValidatePipeline es la barrera entre un pipeline armado por un LLM y la
+// base: es la pieza mas critica de seguridad del servidor.
 
 func TestValidatePipeline_EtapaDeLecturaPermitida(t *testing.T) {
 	pipeline := []map[string]interface{}{
@@ -102,10 +99,9 @@ func TestValidatePipeline_LookupHaciaColeccionPermitida_OK(t *testing.T) {
 }
 
 func TestValidatePipeline_LookupHaciaOperativeLevel_OK(t *testing.T) {
-	// operativeLevel es el catalogo auxiliar de clase/subclase de punto
-	// (ver la nota fechada 2026-09-15 en pipeline_guard.go) -- NO es una de
-	// las 6 entidades tipo cuenta, pero se habilito explicitamente como
-	// destino de $lookup de solo lectura.
+	// operativeLevel es una tabla auxiliar (catalogo de clase/subclase de
+	// punto): no es una entidad, pero se puede usar como destino de un
+	// $lookup.
 	pipeline := []map[string]interface{}{
 		{"$lookup": map[string]interface{}{
 			"from":     "operativeLevel",
@@ -152,10 +148,9 @@ func TestValidatePipeline_GraphLookupHaciaColeccionFueraDeAlcance_Rechazado(t *t
 	}
 }
 
-// Sub-pipelines (2026-10-06): hasta esta fecha, la lista blanca de etapas y
-// el control de "from" se aplicaban solo al primer nivel, y estos 4
-// pipelines pasaban la validacion -- dejaban leer cualquier coleccion de la
-// base.
+// Sub-pipelines: la lista blanca de etapas y el control de "from" se aplican
+// tambien dentro de $facet y de $lookup.pipeline. Sin eso, estos pipelines
+// dejarian leer cualquier coleccion de la base.
 func TestValidatePipeline_SubPipelinesFueraDeAlcance_Rechazados(t *testing.T) {
 	lookupAjeno := map[string]interface{}{"$lookup": map[string]interface{}{
 		"from": "contract", "localField": "ucode", "foreignField": "accountUniqueId", "as": "contratos",
@@ -220,8 +215,8 @@ func TestValidatePipeline_SubPipelineQueNoEsLista_Rechazado(t *testing.T) {
 	}
 }
 
-// Claves repetidas (2026-10-06): el validador ve el ultimo valor de una
-// clave repetida y Mongo ejecuta el texto original -- se rechazan antes.
+// Claves repetidas: el validador ve el ultimo valor de una clave repetida y
+// Mongo ejecuta el texto original, asi que se rechazan antes.
 func TestValidarClavesUnicas(t *testing.T) {
 	casos := []struct {
 		nombre, pipeline string
@@ -248,7 +243,7 @@ func TestValidarClavesUnicas(t *testing.T) {
 	}
 }
 
-// $skip se rechaza en cualquier nivel (2026-10-07): solo sirve para paginar.
+// $skip se rechaza en cualquier nivel: solo sirve para paginar.
 func TestValidatePipeline_Skip_Rechazado(t *testing.T) {
 	casos := [][]map[string]interface{}{
 		{{"$match": map[string]interface{}{}}, {"$skip": 10}},

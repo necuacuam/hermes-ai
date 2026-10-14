@@ -22,8 +22,8 @@ func pipelineDeJSON(t *testing.T, s string) []json.RawMessage {
 }
 
 func TestPipelineDesdeExtJSON_ConservaOrdenDeClaves(t *testing.T) {
-	// Caso real (2026-10-03): ranking por puntos con desempate por
-	// centroUcode. En orden alfabetico, centroUcode quedaba primero.
+	// Ranking por puntos con desempate por centroUcode: en orden
+	// alfabetico, centroUcode quedaria primero.
 	p := pipelineDeJSON(t, `[{"$sort": {"puntos": -1, "centroUcode": 1}}]`)
 
 	out, err := pipelineDesdeExtJSON(p)

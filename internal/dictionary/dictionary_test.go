@@ -11,9 +11,8 @@ import (
 	"hermes-mcp/internal/domain"
 )
 
-// validRelations es un RelationsData completo (todos los campos
-// obligatorios llenos, incluido Campos desde 2026-09-20) -- base para los
-// tests de abajo, que solo tocan lo que quieren probar.
+// validRelations es un RelationsData completo, con todos los campos
+// obligatorios: base para los tests, que solo cambian lo que prueban.
 func validRelations() dictionary.RelationsData {
 	var rel dictionary.RelationsData
 	rel.OrigenDatos = "subconjunto restaurado de UAT, sept. 2026"
@@ -48,11 +47,8 @@ func writeRelationsFile(t *testing.T, v interface{}) string {
 	return path
 }
 
-// --- Hierarchy(): mismos tests que antes (ahora via RelationsData en vez
-// de un string suelto) -- cubren la rama de OrigenDatos configurado/vacio
-// (ver TAvo, 2026-09-16: un agente en vivo califico datos de prueba como
-// "de esta restauracion UAT" solo porque el prompt lo decia como hecho
-// fijo).
+// --- Hierarchy(): origenDatos configurado o vacio. Si viene vacio, el
+// agente no tiene que suponer un entorno.
 
 func TestHierarchy_OrigenDatosConfigurado_SeDevuelveTalCual(t *testing.T) {
 	rel := validRelations()
@@ -79,8 +75,8 @@ func TestHierarchy_OrigenDatosVacio_DevuelveInstruccionDeNoAdivinar(t *testing.T
 }
 
 // Tipos/ColeccionMongo/TablasAuxiliares vienen de internal/domain (no de
-// RelationsData); el resto, del fichero -- red de seguridad barata: si se
-// agrega un campo nuevo al struct sin llenarlo, salta como vacio aca.
+// RelationsData); el resto, del fichero. Si se agrega un campo nuevo al
+// struct sin llenarlo, este test lo detecta.
 func TestHierarchy_CamposEstructurales_NoQuedanVacios(t *testing.T) {
 	info := dictionary.Hierarchy(validRelations())
 	if len(info.Tipos) != len(domain.AllTypes) {
@@ -112,7 +108,7 @@ func TestHierarchy_RelacionesSinFuente(t *testing.T) {
 	}
 }
 
-// --- LoadRelations(): el mecanismo nuevo de carga externa (2026-09-19) ---
+// --- LoadRelations(): carga y validacion del fichero ---
 
 func TestLoadRelations_ArchivoValido_CargaTodo(t *testing.T) {
 	path := writeRelationsFile(t, validRelations())
@@ -196,7 +192,7 @@ func TestLoadRelations_CampoObligatorioVacio_Falla(t *testing.T) {
 	}
 }
 
-// prefijosUcode y general son opcionales desde 2026-10-14.
+// prefijosUcode y general son opcionales.
 func TestLoadRelations_SinPrefijosNiGeneral_NoFalla(t *testing.T) {
 	rel := validRelations()
 	rel.PrefijosUCode = nil
@@ -258,9 +254,7 @@ func TestLoadRelations_PlantillaVersionada_Carga(t *testing.T) {
 	}
 }
 
-// --- Lookup(): el diccionario de campos, desde 2026-09-20 leido de
-// RelationsData.Campos (ya no hardcodeado en este paquete) -- ver TAvo,
-// "TENEMOS UN FICHERO EXTERNO CON EL CONTENIDO DE LAS ESTRUCTURAS?".
+// --- Lookup(): el diccionario de campos, leido de RelationsData.Campos.
 
 func TestLookup_TipoVacio_DevuelveTodosLosTipos(t *testing.T) {
 	rel := validRelations()

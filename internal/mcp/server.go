@@ -78,13 +78,6 @@ func (s *Server) Serve(r io.Reader, w io.Writer) error {
 	return scanner.Err()
 }
 
-// NOTA (2026-09-11): este servidor tenia tambien ListenAndServe/
-// ServeListener para servir MCP por TCP en vez de stdio -- existian solo
-// para el escenario de tunel SSH inverso (el paquete internal/bridge, ya
-// borrado). Se sacaron junto con ese escenario: esta v1 corre siempre
-// en una sola maquina, sobre stdio, que es lo unico que Claude Desktop
-// necesita.
-
 func (s *Server) handle(req Request) *Response {
 	isNotification := len(req.ID) == 0
 

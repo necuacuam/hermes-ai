@@ -6,8 +6,9 @@
 // para evitar una dependencia externa. El protocolo sobre stdio es JSON-RPC
 // 2.0 con mensajes delimitados por salto de linea -- lo suficientemente
 // simple como para implementarlo directo y mantener el binario auditable,
-// sin depender de que la maquina donde corre tenga acceso a un proxy de
-// modulos de Go (relevante en una laptop corporativa con red restringida).
+// sin depender de que la maquina donde se compila tenga acceso a un proxy
+// de modulos de Go (relevante en un equipo corporativo con red
+// restringida).
 // Si mas adelante se prefiere el SDK oficial, este paquete se puede
 // reemplazar sin tocar el resto del codigo (los tools no conocen el
 // transporte).

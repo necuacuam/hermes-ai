@@ -44,16 +44,15 @@ import (
 
 	// Import en blanco: embebe la base de datos IANA de husos horarios en
 	// el binario. time.LoadLocation("Europe/Madrid") depende de que el
-	// sistema operativo tenga esa base instalada -- en una laptop Windows
-	// corporativa (el target real de este proyecto) eso no esta
-	// garantizado. Sin este import, un sistema sin esa base cae al fallback
+	// sistema operativo tenga esa base instalada, y en un equipo Windows
+	// corporativo eso no esta garantizado. Sin este import, un sistema sin esa base cae al fallback
 	// UTC de carpetaDeHoy sin avisar, corriendo la fecha de la carpeta unas
 	// horas cerca de medianoche.
 	_ "time/tzdata"
 )
 
 // Modo distingue una pregunta de conteo ("cuantos hay") de una de listado
-// (mostrar/exportar filas). Lo decide el subagente al llamar a la tool.
+// (mostrar o exportar filas). Lo decide el agente al llamar a reporting.
 type Modo string
 
 const (
@@ -79,9 +78,8 @@ type Input struct {
 	LimitePantalla    int // filas maximas en pantalla si MostrarEnPantalla=true; <=0 usa LimitePantallaPorDefecto
 }
 
-// Result es lo que el subagente recibe de vuelta para comunicarselo al
-// agente (y este al usuario): la cantidad (modo conteo), o las filas
-// mostradas en pantalla y/o el archivo escrito (modo listado).
+// Result es lo que el agente recibe de reporting: la cantidad (modo
+// conteo), o las filas en pantalla y/o el archivo escrito (modo listado).
 type Result struct {
 	Modo     Modo `json:"modo"`
 	Cantidad *int `json:"cantidad,omitempty"` // solo modo conteo
@@ -117,9 +115,9 @@ const ZonaHorariaPorDefecto = "Europe/Madrid"
 
 var zonaHoraria = ZonaHorariaPorDefecto
 
-// SetZonaHoraria fija la zona horaria con la que se arma la carpeta del dia
-// (2026-10-07: antes estaba fija en el codigo). Devuelve error si el
-// nombre no es una zona valida, y en ese caso no cambia nada.
+// SetZonaHoraria fija la zona horaria con la que se arma la carpeta del dia.
+// Devuelve error si el nombre no es una zona valida, y en ese caso no cambia
+// nada.
 func SetZonaHoraria(nombre string) error {
 	if _, err := time.LoadLocation(nombre); err != nil {
 		return err
@@ -180,10 +178,10 @@ func Run(docs []map[string]interface{}, in Input) (Result, error) {
 }
 
 // runConteo exige a lo sumo un documento con un unico valor numerico -- es
-// responsabilidad del subagente terminar el pipeline en algo como $count o
+// responsabilidad del agente terminar el pipeline en algo como $count o
 // un $group que produzca esa forma.
 //
-// CASO ESPECIAL: 0 documentos NO es un error aca, es la respuesta "0". Un
+// Caso especial: 0 documentos no es un error, es la respuesta "0". Un
 // pipeline que termina en $count (o en un $group tipo {_id: null, cantidad:
 // {$sum: 1}}) no emite NINGUN documento cuando no hay ningun match -- eso
 // es como funciona Mongo, no significa que el pipeline este mal armado. Si

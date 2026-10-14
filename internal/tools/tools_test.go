@@ -45,7 +45,7 @@ func (r *runnerFalso) RunPipelineStream(ctx context.Context, t domain.EntityType
 	return nil
 }
 
-// El limite de pantalla lo fija el servidor (2026-10-07): aunque el agente
+// El limite de pantalla lo fija el servidor: aunque el agente
 // mande un limitePantalla mayor, recibe como maximo el configurado y el
 // aviso de que hay mas.
 func TestReporting_LimiteDePantallaFijoDelServidor(t *testing.T) {
@@ -83,8 +83,8 @@ func TestReporting_SinParametroDeLimiteEnElSchema(t *testing.T) {
 	}
 }
 
-// diccionario_de_campos no entrega 'fuente' al agente (2026-10-07): es
-// metadata interna y antes solo la protegia una instruccion del prompt.
+// diccionario_de_campos no entrega 'fuente' al agente: es metadata
+// interna de mantenimiento.
 func TestDiccionario_NoEntregaFuente(t *testing.T) {
 	rel := dictionary.RelationsData{Campos: map[domain.EntityType][]dictionary.FieldInfo{
 		domain.Punto: {{Campo: "data.longName", Descripcion: "Nombre del punto.", Fuente: "NOTA INTERNA: chat de Teams"}},

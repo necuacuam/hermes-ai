@@ -8,20 +8,14 @@ import (
 	"testing"
 )
 
-// testLogger devuelve un *log.Logger que descarta todo -- estos tests no
-// verifican nada de lo que se loguea, solo el efecto en el entorno.
+// testLogger devuelve un *log.Logger que descarta todo: estos tests no
+// verifican lo que se registra, solo el efecto en el entorno.
 func testLogger() *log.Logger {
 	return log.New(io.Discard, "", 0)
 }
 
-// Cubre aplicarDotEnv (agregado 2026-09-16, ver TAvo): antes de esto el
-// binario compilado nunca leia ".env" en absoluto, asi que Claude Desktop
-// (que lanza el .exe directo) terminaba dependiendo de defaults
-// hardcodeados o del bloque "env" de claude_desktop_config.json segun la
-// variable -- dos lugares distintos para la misma pregunta ("que Mongo
-// esta usando esto ahora"). Estos tests confirman las dos garantias que
-// importan: que .env realmente rellena el entorno, y que nunca pisa algo
-// que ya estaba seteado.
+// Tests de aplicarDotEnv: confirman las dos garantias que importan, que el
+// .env completa el entorno y que nunca pisa una variable ya definida.
 
 func escribirEnvTemporal(t *testing.T, contenido string) *os.File {
 	t.Helper()
@@ -74,9 +68,9 @@ func TestAplicarDotEnv_IgnoraComentariosYLineasVacias(t *testing.T) {
 }
 
 func TestAplicarDotEnv_ValorConEspaciosYBarrasSinComillas(t *testing.T) {
-	// Caso real de este proyecto: una ruta de Windows con espacio en el
-	// nombre de carpeta ("Hermes AI"), sin comillas -- tiene que sobrevivir
-	// tal cual, el parser solo separa por el primer "=".
+	// Una ruta de Windows con un espacio en el nombre de carpeta ("Hermes
+	// AI"), sin comillas, tiene que llegar tal cual: el parser solo separa
+	// por el primer signo igual.
 	os.Unsetenv("HERMES_MCP_TEST_RUTA")
 	defer os.Unsetenv("HERMES_MCP_TEST_RUTA")
 

@@ -1,8 +1,9 @@
 // Package tools conecta el protocolo MCP (paquete mcp) con dictionary,
-// reporting y store. Registra 3 tools: diccionario_de_campos y
-// relacion_entre_entidades (no consultan la base) y reporting (ejecucion de
-// un pipeline de agregacion), el unico camino a los datos. Las descripciones de las tools son el contrato tecnico; como
-// conversar con el usuario lo definen los prompts de los agentes.
+// reporting y store. Registra tres herramientas: diccionario_de_campos y
+// relacion_entre_entidades (no consultan la base) y reporting (ejecuta un
+// pipeline de agregacion), el unico camino a los datos. Las descripciones
+// de las herramientas son el contrato tecnico; como conversar con el
+// usuario lo definen los prompts de los agentes.
 package tools
 
 import (
@@ -20,11 +21,9 @@ import (
 	"hermes-mcp/internal/store"
 )
 
-// RegisterAll da de alta las 3 tools en el servidor. limitePantalla y
-// pipelineTimeout vienen de cmd/hermes-mcp (HERMES_MCP_LIMITE_PANTALLA
-// / HERMES_MCP_MONGO_TIMEOUT) -- se configuran juntos a proposito (ver
-// registerReporting): son los dos topes de recursos de cualquier ejecucion
-// de pipeline.
+// RegisterAll registra las tres herramientas. limitePantalla y
+// pipelineTimeout (HERMES_MCP_LIMITE_PANTALLA y HERMES_MCP_MONGO_TIMEOUT)
+// son los dos topes de recursos de toda ejecucion de un pipeline.
 func RegisterAll(server *mcp.Server, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
 	registerDictionary(server, rel)
 	registerRelation(server, rel)
@@ -36,9 +35,8 @@ func jsonSchema(schema string) json.RawMessage {
 }
 
 // tiposEnumJSON arma el "enum" de los schemas desde domain.AllTypes, para
-// que sumar una entidad al registro no exija tocar las tools a mano
-// (2026-10-14: antes la lista estaba escrita en cada schema). conVacio
-// agrega "" al principio (diccionario_de_campos: vacio = todos).
+// que sumar una entidad al registro no exija tocar las herramientas.
+// conVacio agrega "" al principio (en diccionario_de_campos, vacio = todos).
 func tiposEnumJSON(conVacio bool) string {
 	vals := []string{}
 	if conVacio {
@@ -98,9 +96,9 @@ func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
 }
 
 // campoParaAgente es lo que el agente recibe de cada campo: nombre y
-// significado. Fuente NO se entrega (2026-10-07): es metadata interna de
-// mantenimiento (de donde salio cada dato: codigo, Excel, investigacion) y
-// antes solo la protegia una instruccion del prompt de no repetirla.
+// significado. Fuente no se entrega: es metadata interna de mantenimiento,
+// y si el agente la recibiera, solo una instruccion del prompt impediria
+// que la repitiera.
 type campoParaAgente struct {
 	Campo       string `json:"campo"`
 	Descripcion string `json:"descripcion"`
@@ -159,28 +157,25 @@ func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
 //
 // modo "listado": pantalla (recortada a limitePantalla filas, con aviso
 // explicito si el total es mayor; el limite lo fija la configuracion del
-// servidor y el agente no lo puede cambiar -- 2026-10-07, antes habia un
-// parametro limitePantalla sin tope y el agente pedia las filas que
-// quisiera) y/o archivo JSON con el resultado
-// completo. El nombre final del archivo (con sufijo _1/_2... si ya existia)
-// se conoce recien despues de escribirlo. totalFilas siempre se informa,
-// incluido 0. Sin documentos, no se crea archivo.
+// servidor y el agente no lo puede cambiar) y/o archivo JSON con el
+// resultado completo. El nombre final del archivo (con sufijo _1, _2... si
+// ya existia) se conoce despues de escribirlo. totalFilas siempre se
+// informa, incluido 0. Sin documentos, no se crea archivo.
 //
 // El handler elige uno de tres caminos de ejecucion segun lo que se pidio,
 // para no traer a memoria mas de lo necesario:
 //   - modo "conteo": pipeline completo (siempre es 1 documento chico).
 //   - "listado" solo a pantalla (sin guardarEnArchivo): se le agrega
-//     {"$limit": limitePantalla+1} al pipeline ANTES de ejecutarlo -- Mongo
-//     mismo corta ahi, nunca viaja de mas por la red. El +1 es para poder
-//     avisar "hay mas" sin necesitar un $count aparte.
+//     {"$limit": limitePantalla+1} al pipeline antes de ejecutarlo: Mongo
+//     corta ahi y no viaja nada de mas. El +1 permite avisar "hay mas" sin
+//     un $count aparte.
 //   - "listado" con guardarEnArchivo: RunPipelineStream + reporting.
-//     StreamWriter -- el archivo se escribe a medida que llegan los
-//     documentos del cursor (paginado via mongostore.pipelineBatchSize),
-//     sin acumular el resultado completo en memoria de este lado.
+//     StreamWriter: el archivo se escribe a medida que llegan los
+//     documentos del cursor, sin acumular el resultado en memoria.
 //
-// Todos los caminos corren con un context.WithTimeout(pipelineTimeout) --
-// un pipeline mal armado (ej. un $lookup sin indice contra una coleccion
-// grande) no puede colgar el servidor indefinidamente.
+// Todos los caminos corren con un context.WithTimeout(pipelineTimeout): un
+// pipeline mal armado (por ejemplo, un $lookup sin indice contra una
+// coleccion grande) no puede colgar el servidor.
 //
 // Pipeline se recibe como texto crudo por etapa (json.RawMessage) y se
 // ejecuta desde ese texto: decodificarlo a un map perderia el orden de las
@@ -263,8 +258,8 @@ func registerReporting(server *mcp.Server, runner store.PipelineRunner, salidasD
 // reportingHandler es el handler de la tool reporting, aparte de
 // registerReporting para poder testearlo con un PipelineRunner falso.
 // limitePantalla es el maximo de filas en pantalla: lo fija la
-// configuracion (HERMES_MCP_LIMITE_PANTALLA) y no hay argumento que lo
-// cambie -- un "limitePantalla" que mande el agente se ignora.
+// configuracion (HERMES_MCP_LIMITE_PANTALLA) y ningun argumento lo cambia;
+// un "limitePantalla" que mande el agente se ignora.
 func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) mcp.ToolHandler {
 	if limitePantalla <= 0 {
 		limitePantalla = reporting.LimitePantallaPorDefecto
@@ -303,9 +298,8 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 		switch {
 		case modo == reporting.ModoConteo:
 			// Un pipeline de conteo bien armado (terminado en $count o
-			// un $group equivalente) siempre devuelve un unico
-			// documento chico -- no hay necesidad de limitar ni de
-			// streaming aca.
+			// un $group equivalente) devuelve un unico documento chico:
+			// no hace falta limitar ni leer por partes.
 			var docs []map[string]interface{}
 			docs, err = runner.RunPipeline(ctx, coleccion, args.Pipeline)
 			if err == nil {
@@ -313,7 +307,7 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 			}
 
 		case args.MostrarEnPantalla && !args.GuardarEnArchivo:
-			// Solo pantalla: empujar el limite A MONGO en vez de traer
+			// Solo pantalla: el limite lo aplica Mongo, en vez de traer
 			// todo. +1 para poder avisar "hay mas" sin un $count aparte.
 			pipelineConLimite := make([]json.RawMessage, len(args.Pipeline), len(args.Pipeline)+1)
 			copy(pipelineConLimite, args.Pipeline)
@@ -330,10 +324,9 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 			}
 
 		case args.GuardarEnArchivo:
-			// Streaming de punta a punta -- ni el cursor de Mongo ni el
-			// archivo acumulan el resultado completo en memoria de este
-			// lado (ver reporting.StreamWriter y
-			// mongostore.pipelineBatchSize). Siempre JSON.
+			// Lectura y escritura por partes: ni el cursor ni el archivo
+			// acumulan el resultado en memoria (ver reporting.StreamWriter).
+			// Siempre JSON.
 			var sw *reporting.StreamWriter
 			sw, err = reporting.NewStreamWriter(salidasDir, args.NombreSugerido, args.MostrarEnPantalla, limitePantalla)
 			if err == nil {
