@@ -37,7 +37,7 @@ func TestPipelineDesdeExtJSON_ConservaOrdenDeClaves(t *testing.T) {
 }
 
 func TestPipelineDesdeExtJSON_UUID(t *testing.T) {
-	const agentID = "e5b34837-9530-e711-812c-e0071b6641d1"
+	const agentID = "11111111-2222-3333-4444-555555555555"
 	p := pipelineDeJSON(t, `[{"$match": {"uuid": {"$in": [{"$uuid": "`+agentID+`"}]}}}]`)
 
 	out, err := pipelineDesdeExtJSON(p)
@@ -49,7 +49,7 @@ func TestPipelineDesdeExtJSON_UUID(t *testing.T) {
 	if !ok {
 		t.Fatalf("se esperaba primitive.Binary, quedo %T", in[0])
 	}
-	want, _ := hex.DecodeString("e5b348379530e711812ce0071b6641d1")
+	want, _ := hex.DecodeString("11111111222233334444555555555555")
 	if bin.Subtype != 4 || !bytes.Equal(bin.Data, want) {
 		t.Errorf("uuid = subtype %d %x, se esperaba subtype 4 %x", bin.Subtype, bin.Data, want)
 	}

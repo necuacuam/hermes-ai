@@ -42,11 +42,15 @@ cada arranque.
   "estructuraDeCampos": "texto libre",
   "direccion": "texto libre",
   "otrasRelaciones": "texto libre",
+  "prefijosUcode": { "holding": "00", "grupo": "01", "...": "..." },
   "anidamiento": {
     "segunCodigoHermes": "texto libre",
     "segunDocumentacionDeNegocio": "texto libre",
-    "estadoActual": "texto libre"
+    "reglas": "texto libre"
   },
+
+  // Ningun texto lleva contenido de la base (conteos, valores observados,
+  // copias de catalogos, ejemplos con datos reales) -- directivas, §4.
 
   // También obligatorio (no puede faltar ni venir vacío).
   "campos": {

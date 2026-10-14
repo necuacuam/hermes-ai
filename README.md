@@ -42,14 +42,15 @@ en `relaciones/*.json` (no exige recompilar), con el caso real de
   abajo, campo `campos`) en vez de vivir hardcodeado en `internal/dictionary`.
 - **`relacion_entre_entidades`**: jerarquía de tipos, prefijos de ucode,
   nombre real de cada colección Mongo y el mecanismo de `parentUCode`.
-  También estática (no toca Mongo) -- jerarquía/prefijos/colecciones siguen
-  fijos en código (`internal/domain`), pero el mecanismo de relación, las
-  notas de negocio y `origenDatos` se cargan desde el mismo fichero externo
-  (`relaciones/`, ver más abajo) en vez de vivir hardcodeados en Go.
-- **`seek`**: busca entidades reales por nombre aproximado sin asumir tipo.
-  Diagnóstico posterior a un resultado inesperado, no un paso obligatorio.
+  También estática (no toca Mongo) -- la jerarquía y las colecciones siguen
+  fijas en código (`internal/domain`), porque son lo que limita qué se
+  puede consultar; los prefijos de ucode, el mecanismo de relación, las
+  notas de negocio y `origenDatos` se cargan desde el fichero externo
+  (`relaciones/`, ver más abajo).
 - **`reporting`**: ejecuta un pipeline de agregación ya armado (modo
-  `conteo` o `listado`, pantalla y/o archivo JSON local).
+  `conteo` o `listado`, pantalla y/o archivo JSON local). Es el único
+  camino a los datos: toda tabla que se le muestre al usuario sale de acá
+  (la tool `seek` se quitó el 2026-10-07).
 
 Todo campo de negocio vive anidado bajo `data` en el documento Mongo;
 `ucode`/`parentUCode` son la excepción, a nivel raíz. `diccionario_de_campos`
@@ -57,7 +58,7 @@ ya devuelve cada nombre con el prefijo `data.` incluido.
 
 ## Prompts
 
-Las 4 tools de arriba son la capa mecánica -- lo que convierte eso en un
+Las 3 tools de arriba son la capa mecánica -- lo que convierte eso en un
 asistente usable es el system prompt que se carga en Claude Desktop. Hay
 dos, en `prompts/`, para dos audiencias distintas con objetivos distintos:
 
@@ -74,7 +75,7 @@ dos, en `prompts/`, para dos audiencias distintas con objetivos distintos:
   filtro con `$regex` en vez de pausar a preguntar -- prioriza velocidad
   para alguien que ya sabe leer el resultado crudo.
 
-Los dos comparten las mismas 4 tools y las mismas barreras de seguridad
+Los dos comparten las mismas 3 tools y las mismas barreras de seguridad
 (solo lectura, alcance de las 6 entidades + `operativeLevel`) -- esas
 barreras están reforzadas en el servidor (`internal/store/pipeline_guard.go`),
 no en el texto del prompt, así que ningún prompt puede aflojarlas aunque
@@ -103,13 +104,13 @@ está en el paso 6 de "Configurar Claude Desktop" más abajo.
 
 | Variable | Para qué | Dónde se configura | Default |
 |---|---|---|---|
-| `HERMES_MCP_MONGO_URI` | Conexión a Mongo. Vacío explícito fuerza `mockstore` (sin pipelines). | `.env` | **ninguno -- obligatoria** (sin ella, o sin este archivo, el servidor no arranca) |
+| `HERMES_MCP_MONGO_URI` | Conexión a Mongo. | `.env` | **ninguno -- obligatoria** (sin ella, o sin este archivo, el servidor no arranca) |
 | `HERMES_MCP_MONGO_DB` | Base a usar. | `.env` | `hermes-local` |
 | `HERMES_MCP_RELACIONES_PATH` | Ruta al fichero de relaciones a cargar (dentro de `relaciones/`) -- ahí vive tanto la estructura de `relacion_entre_entidades` como `origenDatos` (de qué base/entorno viene lo conectado ahora). Ver sección más abajo. | **bloque `env` de `claude_desktop_config.json`** (no `.env`) | **ninguno -- obligatoria** (sin ella, o sin el fichero, el servidor no arranca) |
 | `HERMES_MCP_SALIDAS_DIR` | Carpeta de salida de `reporting` (`guardarEnArchivo=true`). | `.env` | `./salidas` |
-| `HERMES_MCP_LIMITE_PANTALLA_DEFAULT` | Filas máximas en pantalla si no se especifica. | `.env` | `10` |
-| `HERMES_MCP_LIMITE_SEEK` | Candidatos máximos que devuelve `seek`; si hay más, avisa que se recortó. | `.env` | `50` |
-| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por consulta a Mongo (pipelines de `reporting` y búsquedas de `seek`); Mongo también lo recibe como `maxTimeMS`. | `.env` | `30s` |
+| `HERMES_MCP_LIMITE_PANTALLA` | Filas máximas que `reporting` devuelve en pantalla. Fijo: el agente no lo puede cambiar (para más, archivo). | `.env` | `10` |
+| `HERMES_MCP_MONGO_TIMEOUT` | Timeout por consulta de `reporting`; Mongo también lo recibe como `maxTimeMS`. | `.env` | `30s` |
+| `HERMES_MCP_ZONA_HORARIA` | Zona horaria de la carpeta del día donde se guardan los archivos. | `.env` | `Europe/Madrid` |
 
 ## Cómo correrlo
 
@@ -220,13 +221,11 @@ go test ./...
 cmd/hermes-mcp/            entrypoint
 internal/mcp/               protocolo MCP sobre stdio
 internal/domain/            tipos de entidad, mapeo a colección Mongo
-internal/store/              interfaz Store + validación de pipelines (solo lectura)
-internal/store/mongostore/  implementación real contra MongoDB
-internal/store/mockstore/   fallback en memoria, solo para tests
-internal/graph/              búsqueda y traversal de entidades vivas (usa "seek")
+internal/store/              ejecución y validación de pipelines (solo lectura)
+internal/store/mongostore/  ejecución de pipelines contra MongoDB
 internal/dictionary/        diccionario de campos + jerarquía estática
 internal/reporting/          regla de salida (pantalla/archivo, streaming)
-internal/tools/               conecta las 4 tools MCP con la lógica de arriba
+internal/tools/               conecta las 3 tools MCP con la lógica de arriba
 prompts/                     system prompts del Agente Hermes (negocio y técnico)
 relaciones/                  ficheros de relaciones -- *.example.json versionados, el resto no
 seed/seed.js                 datos de prueba para un sandbox desde cero -- nunca contra la base real

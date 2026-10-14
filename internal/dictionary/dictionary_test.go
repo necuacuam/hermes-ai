@@ -23,7 +23,8 @@ func validRelations() dictionary.RelationsData {
 	rel.OtrasRelaciones = "otras relaciones de prueba"
 	rel.Anidamiento.SegunCodigoHermes = "segun codigo de prueba"
 	rel.Anidamiento.SegunDocumentacionDeNegocio = "segun documentacion de prueba"
-	rel.Anidamiento.EstadoActual = "estado actual de prueba"
+	rel.Anidamiento.Reglas = "reglas de prueba"
+	rel.PrefijosUCode = map[domain.EntityType]string{domain.Cliente: "02", domain.Punto: "04"}
 	rel.Campos = map[domain.EntityType][]dictionary.FieldInfo{
 		domain.Cliente: {
 			{Campo: "data.customerName", Descripcion: "Razon social de prueba.", Fuente: "fixture de test"},
@@ -31,14 +32,6 @@ func validRelations() dictionary.RelationsData {
 		domain.Centro: {
 			{Campo: "data.customerName", Descripcion: "Razon social de prueba.", Fuente: "fixture de test"},
 		},
-	}
-	rel.CamposDeNombre = map[domain.EntityType][]string{
-		domain.Cliente: {"customerName"},
-		domain.Centro:  {"customerName"},
-	}
-	rel.CamposUtilesSeek = map[domain.EntityType][]string{
-		domain.Cliente: {"taxpayerId"},
-		domain.Centro:  {"taxpayerId"},
 	}
 	return rel
 }
@@ -86,8 +79,8 @@ func TestHierarchy_OrigenDatosVacio_DevuelveInstruccionDeNoAdivinar(t *testing.T
 	}
 }
 
-// Jerarquia/PrefijosUCode/ColeccionMongo siguen viniendo de internal/domain
-// (no de RelationsData) -- este test es una red de seguridad barata: si
+// Jerarquia/ColeccionMongo siguen viniendo de internal/domain (no de
+// RelationsData); PrefijosUCode viene del fichero desde 2026-10-07 -- este test es una red de seguridad barata: si
 // alguna vez se agrega un campo nuevo al struct sin llenarlo, salta como
 // vacio aca.
 func TestHierarchy_CamposEstructuralesFijos_NoQuedanVacios(t *testing.T) {
@@ -98,8 +91,11 @@ func TestHierarchy_CamposEstructuralesFijos_NoQuedanVacios(t *testing.T) {
 	if info.MecanismoDeRelacion == "" || info.EstructuraDeCampos == "" || info.Direccion == "" || info.OtrasRelaciones == "" {
 		t.Error("ningun campo de texto estructural deberia quedar vacio")
 	}
-	if info.Anidamiento.EstadoActual == "" {
-		t.Error("Anidamiento.EstadoActual no deberia quedar vacio")
+	if info.Anidamiento.Reglas == "" {
+		t.Error("Anidamiento.Reglas no deberia quedar vacio")
+	}
+	if info.PrefijosUCode[domain.Punto] != "04" {
+		t.Errorf("PrefijosUCode tiene que venir del fichero de relaciones: %v", info.PrefijosUCode)
 	}
 }
 
@@ -156,7 +152,8 @@ func TestLoadRelations_ClaveDesconocida_Falla(t *testing.T) {
 		"estructuraDeCampos": "x",
 		"direccion": "x",
 		"otrasRelaciones": "x",
-		"anidamiento": {"segunCodigoHermes": "x", "segunDocumentacionDeNegocio": "x", "estadoActual": "x"},
+		"anidamiento": {"segunCodigoHermes": "x", "segunDocumentacionDeNegocio": "x", "reglas": "x"},
+		"prefijosUcode": {"cliente": "02"},
 		"campos": {"cliente": [{"campo": "x", "descripcion": "x", "fuente": "x"}]},
 		"campoQueNoExiste": "typo"
 	}`
@@ -178,10 +175,9 @@ func TestLoadRelations_CampoObligatorioVacio_Falla(t *testing.T) {
 		{"estructuraDeCampos", func(r *dictionary.RelationsData) { r.EstructuraDeCampos = "" }},
 		{"direccion", func(r *dictionary.RelationsData) { r.Direccion = "" }},
 		{"otrasRelaciones", func(r *dictionary.RelationsData) { r.OtrasRelaciones = "" }},
-		{"anidamiento.estadoActual", func(r *dictionary.RelationsData) { r.Anidamiento.EstadoActual = "" }},
+		{"anidamiento.reglas", func(r *dictionary.RelationsData) { r.Anidamiento.Reglas = "" }},
+		{"prefijosUcode", func(r *dictionary.RelationsData) { r.PrefijosUCode = nil }},
 		{"campos", func(r *dictionary.RelationsData) { r.Campos = nil }},
-		{"camposDeNombre", func(r *dictionary.RelationsData) { r.CamposDeNombre = nil }},
-		{"camposUtilesSeek", func(r *dictionary.RelationsData) { r.CamposUtilesSeek = nil }},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {

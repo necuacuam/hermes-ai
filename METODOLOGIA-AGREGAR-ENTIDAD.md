@@ -10,10 +10,9 @@ Principio rector (no negociable, ya establecido en `dictionary.go` y
 reforzado el 2026-09-28): **lo técnico/estructural vive en Go y exige
 recompilar; el contenido de negocio vive en `relaciones/*.json` y NO exige
 recompilar.** La línea divisoria exacta está en el paso 2 vs. el paso 3 de
-abajo. No mezclar las dos cosas — meter contenido de negocio en Go (como
-pasó con `seek`'s `camposUtilesParaSeek`/`nameFieldCandidates` antes de
-externalizarlos) es exactamente el error que este documento busca evitar
-para las próximas ~18 entidades.
+abajo. No mezclar las dos cosas — meter contenido de negocio en Go es
+exactamente el error que este documento busca evitar para las próximas ~18
+entidades.
 
 ## Paso 0 — Investigar la entidad antes de tocar nada
 
@@ -82,17 +81,12 @@ WebUI). Después de este paso, todo lo demás es edición de JSON.
      el medio si sí participa).
    - Agregarla a `CollectionName` (nombre real de colección Mongo,
      confirmado en el Paso 0).
-   - Agregarla a `MDMPrefix` **SOLO SI** confirmaste que usa el prefijo MDM
-     de 2 dígitos real (no la tabla estática de `entity.go`, que puede
-     mentir — ver Paso 0.1). Si usa `UCODE_FREE` o no tiene prefijo fijo,
-     NO agregarla acá — hacerlo rompería `mongostore.prefixToType` (colisión
-     de prefijos con una entidad real).
-2. **`internal/tools/tools.go`**: agregar el alias de negocio a los 3
-   `enum` de los schemas JSON (`dictionaryArgs.tipo`, `seekArgs.tipo`,
+2. **`internal/tools/tools.go`**: agregar el alias de negocio a los 2
+   `enum` de los schemas JSON (`dictionaryArgs.tipo`,
    `reportingArgs.coleccionInicial`). Son strings literales, no se leen de
    `relaciones.json` — si falta acá, el servidor rechaza la entidad aunque
    esté perfectamente documentada en el JSON. Ajustar las descripciones de
-   las 4 tools si la entidad nueva tiene una particularidad relevante (ej.
+   las 3 tools si la entidad nueva tiene una particularidad relevante (ej.
    "no tiene padre/hijos", igual que se hizo para salesPerson).
 3. **`internal/store/pipeline_guard.go`**: normalmente NO hace falta
    tocarlo — `coleccionesPermitidas` se arma automáticamente a partir de
@@ -106,27 +100,31 @@ WebUI). Después de este paso, todo lo demás es edición de JSON.
 
 ## Paso 3 — Contenido de negocio (solo JSON, repetible sin recompilar)
 
+**Regla (directivas de diseño, §4): el JSON nunca lleva contenido de la
+base.** Nada de conteos ("N documentos tienen X"), valores observados
+("vistos en UAT: 'A', 'B'…"), copias de catálogos o tablas auxiliares
+(códigos con su significado) ni ejemplos con datos reales (nombres,
+ucodes, uuids). Se describe la estructura, el mecanismo de relación y el
+significado de cada propiedad; si un dato está en una colección, la
+descripción dice que se consulta con `reporting`. Consultar la base para
+confirmar algo está bien; lo que no va en el JSON es el resultado de esa
+consulta. Tampoco en `fuente`.
+
 Editar los 5 ficheros de relaciones (ver lista al final) con las mismas
-4 piezas, en este orden:
+3 piezas, en este orden:
 
 1. **`campos.<entidad>`**: un `FieldInfo` por campo real confirmado (no
    listar campos del Excel que no se confirmaron en el código o en un
    documento real — marcarlos como discrepancia si aparecen en una fuente y
    no en la otra, nunca como hecho). Cada entrada lleva `fuente` citando de
    dónde sale (código, Excel, o "confirmado contra un documento real de
-   esta base" con fecha) — `fuente` es metadata interna, nunca se le repite
-   al usuario (ver regla dura en `dictionary.go`).
-2. **`camposDeNombre.<entidad>`**: lista de campos (sin prefijo `data.`,
-   eso lo agrega el código) candidatos a "nombre de negocio" de esta
-   entidad, usados por `pickDisplayName`/`FindByNameAndType`. Vacío (`[]`)
-   si la entidad no tiene nombre de negocio (como dirección) o si todavía
-   no se confirmó (mejor `[]` que inventar un campo que después no matchea
-   nunca en silencio).
-3. **`camposUtilesSeek.<entidad>`**: lista de campos útiles para
-   desambiguar candidatos en `seek` (NIF, ubicación, algo que ayude a un
-   humano a reconocer la entidad correcta). También vacío si no se confirmó
-   nada todavía.
-4. **`otrasRelaciones`**: agregar un ítem numerado nuevo describiendo cómo
+   esta base" con fecha) — `fuente` es metadata interna: el MCP no se la
+   entrega al agente.
+2. **`prefijosUcode.<entidad>`**: el prefijo MDM de 2 dígitos del ucode,
+   **SOLO SI** confirmaste que la entidad lo usa (no la tabla estática de
+   `entity.go`, que puede mentir — ver Paso 0.1). Si usa `UCODE_FREE` o no
+   tiene prefijo fijo, no se agrega (como salesPerson).
+3. **`otrasRelaciones`**: agregar un ítem numerado nuevo describiendo cómo
    se vincula la entidad nueva con las demás — SOLO si se confirmó contra
    datos reales (ver Paso 4). Si la relación es una hipótesis sin confirmar,
    decirlo explícitamente ("NO CONFIRMADO", "hipótesis descartada: X, Y") en
@@ -141,15 +139,11 @@ Editar los 5 ficheros de relaciones (ver lista al final) con las mismas
    el JSON — nunca escribir `campos.<entidad>` a partir de solo el Excel o
    solo el código sin cruzarlo contra un documento real, si hay acceso a
    Mongo para hacerlo.
-2. Probar las 4 tools con la entidad nueva:
+2. Probar las 3 tools con la entidad nueva:
    - `diccionario_de_campos` con `tipo:"<entidad>"` — confirmar que
      devuelve los campos esperados.
    - `relacion_entre_entidades` — confirmar que aparece en `jerarquia`/
      `coleccionMongo` y que la nota nueva en `otrasRelaciones` se lee bien.
-   - `seek` con un `needle` real — confirmar que encuentra candidatos y que
-     `nombre`/`atributos` vienen pobladas (si `camposDeNombre`/
-     `camposUtilesSeek` quedaron vacíos a propósito, confirmar que el
-     resultado es "sin nombre" y no un error).
    - `reporting` con `coleccionInicial:"<entidad>"` y un `$match` real sobre
      un campo de `data.*` documentado — confirmar que la validación del
      primer `$match` (prefijo `data.`) no rechaza un campo real por mala
@@ -207,23 +201,22 @@ usuario a medida que se prueba cada hipótesis:
   más snapshots así, considerar automatizar esta sincronización en vez de
   repetir el mismo bloque a mano 5+ veces)
 
-`LoadRelations` (en `dictionary.go`) valida que `campos`, `camposDeNombre`
-y `camposUtilesSeek` no vengan vacíos globalmente — pero no valida que
-TODAS las entidades de `domain.AllTypes` tengan una entrada en cada uno.
-Si se olvida un fichero de los 5, o una entidad queda sin entrada en algún
-mapa, el servidor arranca igual pero esa entidad se comporta como si no
-tuviera nombre/atributos de desambiguación en `seek` — no es un error
-fuerte, así que conviene chequearlo a mano en el Paso 4, no asumir que el
-arranque exitoso significa que todo quedó completo.
+`LoadRelations` (en `dictionary.go`) valida que `campos` no venga vacío
+globalmente — pero no valida que TODAS las entidades de `domain.AllTypes`
+tengan una entrada. Si se olvida un fichero de los 5, o una entidad queda
+sin entrada, el servidor arranca igual pero `diccionario_de_campos` no
+devuelve nada para esa entidad — no es un error fuerte, así que conviene
+chequearlo a mano en el Paso 4, no asumir que el arranque exitoso
+significa que todo quedó completo.
 
 ## Pendiente evaluado y descartado (por ahora) el 2026-09-28
 
-Se evaluó mover también `AllTypes`/`CollectionName`/`MDMPrefix` y los 3
+Se evaluó mover también `AllTypes`/`CollectionName` y los
 `enum` de `tools.go` a `relaciones.json`, para que una entidad nueva sea
 100% JSON sin recompilar. Se descartó por ahora: es un refactor de
 arquitectura real (esas variables hoy son globales de paquete fijadas antes
 de que se lea `relaciones.json`; pasarlas a config exige inyectarlas como
-parámetro en `mongostore.New`/`graph.New`/etc., y perder la seguridad de
+parámetro en `mongostore.New`/`tools.RegisterAll`/etc., y perder la seguridad de
 tipos en compilación de `domain.Cliente` como constante). Decisión de TAvo:
 mantener el nombre de colección/prefijo MDM en el binario compilado
 (seguridad), y el contenido de negocio en JSON — este documento es el

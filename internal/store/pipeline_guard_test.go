@@ -245,3 +245,16 @@ func TestValidarClavesUnicas(t *testing.T) {
 		}
 	}
 }
+
+// $skip se rechaza en cualquier nivel (2026-10-07): solo sirve para paginar.
+func TestValidatePipeline_Skip_Rechazado(t *testing.T) {
+	casos := [][]map[string]interface{}{
+		{{"$match": map[string]interface{}{}}, {"$skip": 10}},
+		{{"$facet": map[string]interface{}{"x": []interface{}{map[string]interface{}{"$skip": 10}}}}},
+	}
+	for i, p := range casos {
+		if err := store.ValidatePipeline(p); err == nil {
+			t.Errorf("caso %d: se esperaba error por $skip", i)
+		}
+	}
+}

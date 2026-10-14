@@ -77,8 +77,10 @@ import (
 // lo que esta tool le devolvio.
 //
 // Regla para toda entrada nueva de aca en mas: Descripcion es 100% lo
-// que el agente puede decirle al usuario (mecanismo, limitaciones,
-// tabla de codigos) -- CERO narrativa de "como llegamos a esto"
+// que el agente puede decirle al usuario (mecanismo, limitaciones) --
+// nunca contenido de la base (conteos, valores observados, copias de
+// catalogos, ejemplos con datos reales: eso se consulta con reporting,
+// ver directivas de diseño §4) -- y CERO narrativa de "como llegamos a esto"
 // (Excel/codigo/chat/comparaciones hechas a mano, citas de investigacion).
 // Toda esa procedencia va en Fuente, y solo en Fuente.
 type FieldInfo struct {
@@ -138,11 +140,12 @@ func Lookup(campos map[domain.EntityType][]FieldInfo, t domain.EntityType) map[d
 // (parseando codigo + Excel en cada deploy a PRO) y que se consulta desde
 // SharePoint.
 //
-// Jerarquia/PrefijosUCode/ColeccionMongo siguen viniendo de internal/domain
-// (Go compilado): son hechos atados al codigo real que arma pipelines de
-// verdad en otro lado del servidor (ver internal/store) -- no tiene sentido
-// que un archivo externo pueda decir un nombre de coleccion distinto al que
-// el propio codigo usa para consultar. El resto (mecanismo de relacion,
+// Jerarquia/ColeccionMongo siguen viniendo de internal/domain (Go
+// compilado): el nombre de coleccion es lo que limita que se puede
+// consultar (ver internal/store y las directivas de diseño, §4) -- no tiene
+// sentido que un archivo externo pueda decir un nombre de coleccion
+// distinto al que el propio codigo usa. PrefijosUCode es conocimiento
+// tecnico del modelo y viene del fichero de relaciones (2026-10-07). El resto (mecanismo de relacion,
 // notas de negocio, origenDatos) es texto libre que SI puede cambiar sin
 // tocar codigo -- ver RelationsData/LoadRelations mas abajo (2026-09-19,
 // evaluado y pedido por TAvo: mantener sincronizados dos binarios,
@@ -155,8 +158,8 @@ func Lookup(campos map[domain.EntityType][]FieldInfo, t domain.EntityType) map[d
 // un campo generico ParentUCode) cambia solo cuando cambia el modelo de
 // Hermes, no con cada alta de un cliente real. Resolver una entidad REAL
 // por nombre (¿existe un cliente llamado 'Macedonia'? ¿cual es su
-// sucursal?) es un trabajo distinto, contra datos vivos -- eso lo hace la
-// tool "seek".
+// sucursal?) es un trabajo distinto, contra datos vivos -- eso lo hace
+// "reporting".
 type HierarchyInfo struct {
 	Jerarquia           []domain.EntityType          `json:"jerarquia"`
 	PrefijosUCode       map[domain.EntityType]string `json:"prefijosUcode"`
@@ -169,7 +172,7 @@ type HierarchyInfo struct {
 	Anidamiento         struct {
 		SegunCodigoHermes           string `json:"segunCodigoHermes"`
 		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
-		EstadoActual                string `json:"estadoActual"`
+		Reglas                      string `json:"reglas"`
 	} `json:"anidamiento"`
 }
 
@@ -209,34 +212,19 @@ type RelationsData struct {
 	EstructuraDeCampos  string `json:"estructuraDeCampos"`
 	Direccion           string `json:"direccion"`
 	OtrasRelaciones     string `json:"otrasRelaciones"`
-	Anidamiento         struct {
+	// PrefijosUCode: prefijo de 2 digitos del ucode por tipo (ej. punto
+	// "04"), segun el codigo de Hermes. Obligatorio.
+	PrefijosUCode map[domain.EntityType]string `json:"prefijosUcode"`
+	Anidamiento   struct {
 		SegunCodigoHermes           string `json:"segunCodigoHermes"`
 		SegunDocumentacionDeNegocio string `json:"segunDocumentacionDeNegocio"`
-		EstadoActual                string `json:"estadoActual"`
+		Reglas                      string `json:"reglas"`
 	} `json:"anidamiento"`
 	// Campos: el diccionario de campos completo por tipo de entidad (la
 	// tool "diccionario_de_campos", ver Lookup mas arriba). Obligatorio
 	// igual que el resto (salvo OrigenDatos) -- sin esto esa tool no tiene
 	// nada que devolver.
 	Campos map[domain.EntityType][]FieldInfo `json:"campos"`
-	// CamposDeNombre: por tipo de entidad, que campos de "data" pueden
-	// contener el nombre de negocio (ver mongostore.pickDisplayName /
-	// FindByNameAndType). MOVIDO ACA 2026-09-28 (pedido por TAvo: estaba
-	// hardcodeado como una lista global en mongostore.go -- "camposUtilesParaSeek"
-	// y "nameFieldCandidates" -- exactamente el tipo de contenido curado a
-	// mano que este archivo lleva documentando desde 2026-09-20 que NO va en
-	// Go). Es lo que antes era el var package-level "nameFieldCandidates" en
-	// mongostore.go, una unica lista compartida por las 6 entidades -- se
-	// mantiene igual (misma lista, ahora por tipo para poder diferir en el
-	// futuro, ej. salesPerson con FirstName/LastName en vez de accountName)
-	// en vez de recompilar el binario para agregar/sacar un campo candidato.
-	CamposDeNombre map[domain.EntityType][]string `json:"camposDeNombre"`
-	// CamposUtilesSeek: por tipo de entidad, que atributos mostrar en un
-	// candidato de "seek" para ayudar a desambiguar (NIF, ubicacion, tipo de
-	// centro/punto, nombre del padre, etc.) en vez del objeto "data"
-	// completo (60+ campos). MOVIDO ACA 2026-09-28 junto con CamposDeNombre
-	// -- antes era "camposUtilesParaSeek" en tools.go, mismo problema.
-	CamposUtilesSeek map[domain.EntityType][]string `json:"camposUtilesSeek"`
 }
 
 // LoadRelations lee y valida el fichero de relaciones -- falla fuerte
@@ -273,17 +261,14 @@ func LoadRelations(path string) (RelationsData, error) {
 	if rel.OtrasRelaciones == "" {
 		faltantes = append(faltantes, "otrasRelaciones")
 	}
-	if rel.Anidamiento.SegunCodigoHermes == "" || rel.Anidamiento.SegunDocumentacionDeNegocio == "" || rel.Anidamiento.EstadoActual == "" {
+	if len(rel.PrefijosUCode) == 0 {
+		faltantes = append(faltantes, "prefijosUcode")
+	}
+	if rel.Anidamiento.SegunCodigoHermes == "" || rel.Anidamiento.SegunDocumentacionDeNegocio == "" || rel.Anidamiento.Reglas == "" {
 		faltantes = append(faltantes, "anidamiento.*")
 	}
 	if len(rel.Campos) == 0 {
 		faltantes = append(faltantes, "campos")
-	}
-	if len(rel.CamposDeNombre) == 0 {
-		faltantes = append(faltantes, "camposDeNombre")
-	}
-	if len(rel.CamposUtilesSeek) == 0 {
-		faltantes = append(faltantes, "camposUtilesSeek")
 	}
 	if len(faltantes) > 0 {
 		return rel, fmt.Errorf("dictionary: fichero de relaciones %q incompleto -- faltan (o vienen vacios): %s", path, strings.Join(faltantes, ", "))
@@ -292,19 +277,14 @@ func LoadRelations(path string) (RelationsData, error) {
 }
 
 // origenDatosNoConfigurado es lo que se devuelve en OrigenDatos cuando
-// RelationsData.OrigenDatos viene vacio. No es un texto neutro cualquiera
-// -- lleva la instruccion adentro a proposito (ver nota de TAvo 2026-09-16:
-// un agente en vivo califico datos de prueba como "de esta restauracion
-// UAT" solo porque el prompt tecnico lo decia como hecho fijo, cuando en
-// realidad era una foto de un momento y ni siquiera del UAT completo, sino
-// de un subconjunto). Poniendo la regla ACA, sobrevive aunque el prompt se
-// desactualice o cambie: el agente la ve fresca en cada llamada a
-// relacion_entre_entidades, no depende de que la recuerde de la
-// conversacion o de texto estatico en su system prompt.
-const origenDatosNoConfigurado = "No configurado en el fichero de relaciones (origenDatos vacio). NO asumas ni nombres un entorno (UAT, dev, QA, produccion, etc.) por conocimiento previo, por lo que diga cualquier prompt, o por lo que se haya dicho en otra conversacion -- ese dato no esta confirmado. Si hace falta comentar que unos valores parecen de prueba (placeholders, seriales repetidos, etc.), decilo en esos terminos genericos, sin nombrar un origen especifico."
+// RelationsData.OrigenDatos viene vacio. Es solo el dato: que hace el
+// agente en ese caso (no nombrar un entorno) lo dicen los dos prompts
+// (2026-10-07: antes la instruccion estaba escrita aca, y el comportamiento
+// de los agentes va en sus prompts -- directivas de diseño, §2).
+const origenDatosNoConfigurado = "No configurado."
 
 // Hierarchy devuelve la relacion estructural entre los tipos, combinando lo
-// fijo (Jerarquia/PrefijosUCode/ColeccionMongo, de internal/domain) con lo
+// fijo (Jerarquia/ColeccionMongo, de internal/domain) con lo
 // que viene del fichero de relaciones cargado al arrancar (ver
 // RelationsData, LoadRelations, HERMES_MCP_RELACIONES_PATH en main.go).
 func Hierarchy(rel RelationsData) HierarchyInfo {
@@ -314,7 +294,7 @@ func Hierarchy(rel RelationsData) HierarchyInfo {
 	}
 	info := HierarchyInfo{
 		Jerarquia:           domain.AllTypes,
-		PrefijosUCode:       domain.MDMPrefix,
+		PrefijosUCode:       rel.PrefijosUCode,
 		ColeccionMongo:      domain.CollectionName,
 		OrigenDatos:         origen,
 		MecanismoDeRelacion: rel.MecanismoDeRelacion,

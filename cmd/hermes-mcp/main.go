@@ -25,13 +25,8 @@
 // evitar). Si la variable no esta seteada en absoluto (ni en el entorno
 // real, ni en .env), el servidor no arranca y corta con un error pidiendo
 // que se configure -- ver .env.example para la URI del Mongo local de
-// este repo (docker-compose.yml).
-//
-// Para forzar mockstore (datos hardcodeados en Go, SIN pipelines de
-// agregacion soportados -- solo util para correr sin Mongo a mano, ej. los
-// tests de Go), setear HERMES_MCP_MONGO_URI a una cadena vacia
-// explicitamente (no simplemente omitirla -- omitirla es el error de
-// arriba, no mockstore).
+// este repo (docker-compose.yml). Tampoco puede quedar vacia: el modo de
+// datos de prueba en memoria se quito el 2026-10-07, junto con seek.
 //
 // HERMES_MCP_RELACIONES_PATH tambien es OBLIGATORIA -- ruta al fichero de
 // relaciones a cargar, dentro de la carpeta relaciones/ (ver
@@ -48,7 +43,7 @@
 // Transporte: siempre stdio (lo que Claude Desktop espera de un MCP local).
 // Hasta el 2026-09-10 este binario tambien podia servir por TCP en dos
 // modos (HERMES_MCP_LISTEN_ADDR / HERMES_MCP_DIAL_ADDR) para un tunel SSH
-// inverso entre dos laptops -- se saco (ver internal/bridge) porque ya no
+// inverso entre dos laptops -- se saco (el paquete internal/bridge se borro el 2026-10-07) porque ya no
 // aplica: el Mongo local de esta v1 tiene todo lo necesario, todo corre en
 // una sola maquina.
 package main
@@ -64,11 +59,8 @@ import (
 	"time"
 
 	"hermes-mcp/internal/dictionary"
-	"hermes-mcp/internal/graph"
 	"hermes-mcp/internal/mcp"
 	"hermes-mcp/internal/reporting"
-	"hermes-mcp/internal/store"
-	"hermes-mcp/internal/store/mockstore"
 	"hermes-mcp/internal/store/mongostore"
 	"hermes-mcp/internal/tools"
 )
@@ -196,14 +188,13 @@ func main() {
 		salidasDir = "./salidas"
 	}
 
-	// LookupEnv (no Getenv) porque hace falta distinguir "la variable no
-	// esta seteada en absoluto" (error -- ya no hay default embebido aca,
-	// ver TAvo 2026-09-16: .env es la unica fuente de verdad, no el
-	// codigo) de "esta seteada explicitamente a vacio" (forzar mockstore a
-	// proposito, eso si sigue soportado).
-	mongoURI, uriSeteada := os.LookupEnv("HERMES_MCP_MONGO_URI")
-	if !uriSeteada {
-		logger.Fatalf("HERMES_MCP_MONGO_URI no esta seteada -- no hay default embebido en el codigo. Configurala en .env (ver .env.example) con la URI real, o seteala explicitamente a vacio ahi mismo para forzar mockstore (datos de prueba, sin pipelines de agregacion).")
+	// Obligatoria y sin default embebido (TAvo 2026-09-16: .env es la unica
+	// fuente de verdad, no el codigo). Desde 2026-10-07 tampoco puede quedar
+	// vacia: el modo de datos de prueba en memoria se quito junto con seek,
+	// porque reporting siempre necesita un Mongo real.
+	mongoURI := os.Getenv("HERMES_MCP_MONGO_URI")
+	if mongoURI == "" {
+		logger.Fatalf("HERMES_MCP_MONGO_URI no esta seteada -- no hay default embebido en el codigo. Configurala en .env (ver .env.example) con la URI real.")
 	}
 
 	// HERMES_MCP_RELACIONES_PATH: ruta al fichero de relaciones a cargar,
@@ -220,12 +211,7 @@ func main() {
 	// claude_desktop_config.json, NO en ".env" (ver el comentario de
 	// cabecera del archivo y README.md) -- distingue una instalacion de
 	// Claude Desktop de otra, no es config de conexion compartida.
-	//
-	// Se carga ACA, ANTES de construir el MongoStore (2026-09-28) -- porque
-	// MongoStore ahora necesita rel.CamposDeNombre para saber, por tipo de
-	// entidad, en que campos buscar por nombre (ver mongostore.New): ese
-	// dato tambien es contenido de negocio externalizado, ya no un var
-	// hardcodeado en mongostore.go.
+
 	relacionesPath, relacionesPathSeteada := os.LookupEnv("HERMES_MCP_RELACIONES_PATH")
 	if !relacionesPathSeteada || relacionesPath == "" {
 		logger.Fatalf("HERMES_MCP_RELACIONES_PATH no esta seteada -- hace falta la ruta al fichero de relaciones a cargar. Configurala en el bloque \"env\" de claude_desktop_config.json (ver README.md, \"Configurar Claude Desktop\"), o en la sesion de shell si corres localmente sin Claude Desktop. Copia relaciones/relaciones.example.json a esa ruta antes, completando origenDatos.")
@@ -235,44 +221,29 @@ func main() {
 		logger.Fatalf("no se pudo cargar el fichero de relaciones: %v", err)
 	}
 
-	var st store.Store
-	if mongoURI != "" {
-		dbName := os.Getenv("HERMES_MCP_MONGO_DB")
-		if dbName == "" {
-			dbName = "hermes-local"
-		}
-		ms, err := mongostore.New(context.Background(), mongoURI, dbName, rel.CamposDeNombre)
-		if err != nil {
-			logger.Fatalf("no se pudo conectar a Mongo (%s, db %s): %v", mongostore.URISinClave(mongoURI), dbName, err)
-		}
-		st = ms
-		logger.Printf("arrancando contra Mongo real en %s (db %s)", mongostore.URISinClave(mongoURI), dbName)
-	} else {
-		st = mockstore.New(mockstore.Fixtures())
-		logger.Printf("HERMES_MCP_MONGO_URI seteada explicitamente a vacio -- arrancando con datos de prueba en memoria (mockstore), SIN pipelines de agregacion. Ver README.md para levantar Mongo local.")
+	dbName := os.Getenv("HERMES_MCP_MONGO_DB")
+	if dbName == "" {
+		dbName = "hermes-local"
 	}
-
-	g := graph.New(st)
+	ms, err := mongostore.New(context.Background(), mongoURI, dbName)
+	if err != nil {
+		logger.Fatalf("no se pudo conectar a Mongo (%s, db %s): %v", mongostore.URISinClave(mongoURI), dbName, err)
+	}
+	logger.Printf("arrancando contra Mongo real en %s (db %s)", mongostore.URISinClave(mongoURI), dbName)
 
 	limitePantalla := reporting.LimitePantallaPorDefecto
-	if raw := os.Getenv("HERMES_MCP_LIMITE_PANTALLA_DEFAULT"); raw != "" {
+	if raw := os.Getenv("HERMES_MCP_LIMITE_PANTALLA"); raw != "" {
 		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
 			limitePantalla = v
 		} else {
-			logger.Printf("HERMES_MCP_LIMITE_PANTALLA_DEFAULT=%q invalida (tiene que ser un entero > 0) -- usando el default %d", raw, limitePantalla)
+			logger.Printf("HERMES_MCP_LIMITE_PANTALLA=%q invalida (tiene que ser un entero > 0) -- usando el default %d", raw, limitePantalla)
 		}
 	}
 
-	limiteSeek := store.LimiteSeekPorDefecto
-	if raw := os.Getenv("HERMES_MCP_LIMITE_SEEK"); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-			limiteSeek = v
-		} else {
-			logger.Printf("HERMES_MCP_LIMITE_SEEK=%q invalida (tiene que ser un entero > 0) -- usando el default %d", raw, limiteSeek)
+	if raw := os.Getenv("HERMES_MCP_ZONA_HORARIA"); raw != "" {
+		if err := reporting.SetZonaHoraria(raw); err != nil {
+			logger.Printf("HERMES_MCP_ZONA_HORARIA=%q invalida (%v) -- usando %s", raw, err, reporting.ZonaHorariaPorDefecto)
 		}
-	}
-	if ms, ok := st.(*mongostore.MongoStore); ok {
-		ms.SetLimiteSeek(limiteSeek)
 	}
 
 	timeout := timeoutPorDefecto
@@ -285,9 +256,9 @@ func main() {
 	}
 
 	server := mcp.NewServer("hermes-mcp", "0.3.0-pipeline", logger)
-	tools.RegisterAll(server, g, salidasDir, limitePantalla, limiteSeek, timeout, rel)
+	tools.RegisterAll(server, ms, salidasDir, limitePantalla, timeout, rel)
 
-	logger.Printf("salidas en %s -- limite de pantalla por defecto %d filas, limite de seek %d candidatos, timeout de consulta %s", salidasDir, limitePantalla, limiteSeek, timeout)
+	logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
 
 	if err := server.Serve(os.Stdin, os.Stdout); err != nil {
 		logger.Fatalf("error fatal: %v", err)

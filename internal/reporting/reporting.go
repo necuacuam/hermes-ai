@@ -65,12 +65,9 @@ const (
 // comentario del paquete sobre por que no hay CSV.
 const formatoArchivo = "json"
 
-// LimitePantallaPorDefecto se usa cuando el caller pide mostrar en pantalla
-// pero no especifica un limite (o especifica uno <= 0), y ademas no hay un
-// default configurado a nivel servidor (HERMES_MCP_LIMITE_PANTALLA_DEFAULT,
-// ver cmd/hermes-mcp). Configurable por llamada via Input.LimitePantalla, y
-// a nivel servidor via esa variable de entorno -- esta constante es solo el
-// ultimo fallback.
+// LimitePantallaPorDefecto es el maximo de filas en pantalla si
+// HERMES_MCP_LIMITE_PANTALLA no esta configurada (ver cmd/hermes-mcp). El
+// agente no lo puede cambiar: la tool reporting no recibe un limite.
 const LimitePantallaPorDefecto = 10
 
 // Input son los parametros de una consulta de modo "listado" que solo pide
@@ -114,13 +111,30 @@ func slugify(s string) string {
 	return strings.ToLower(s)
 }
 
-// carpetaDeHoy devuelve la subcarpeta del dia de hoy en hora de España
-// (Europe/Madrid) dentro de baseDir, para que la fecha no dependa del huso
+// ZonaHorariaPorDefecto es la zona horaria de la carpeta del dia si
+// HERMES_MCP_ZONA_HORARIA no esta configurada (ver cmd/hermes-mcp).
+const ZonaHorariaPorDefecto = "Europe/Madrid"
+
+var zonaHoraria = ZonaHorariaPorDefecto
+
+// SetZonaHoraria fija la zona horaria con la que se arma la carpeta del dia
+// (2026-10-07: antes estaba fija en el codigo). Devuelve error si el
+// nombre no es una zona valida, y en ese caso no cambia nada.
+func SetZonaHoraria(nombre string) error {
+	if _, err := time.LoadLocation(nombre); err != nil {
+		return err
+	}
+	zonaHoraria = nombre
+	return nil
+}
+
+// carpetaDeHoy devuelve la subcarpeta del dia de hoy en la zona horaria
+// configurada dentro de baseDir, para que la fecha no dependa del huso
 // horario del proceso. Cae a UTC si la base de zonas horarias no esta
 // disponible (ver el import en blanco de time/tzdata mas arriba, que hace
 // que esto casi nunca pase).
 func carpetaDeHoy(baseDir string) string {
-	loc, err := time.LoadLocation("Europe/Madrid")
+	loc, err := time.LoadLocation(zonaHoraria)
 	if err != nil {
 		loc = time.UTC
 	}
@@ -297,7 +311,7 @@ func NewStreamWriter(baseDir, nombreSugerido string, mostrarEnPantalla bool, lim
 	}, nil
 }
 
-// crearArchivo crea la carpeta del dia (hora de España) y el archivo con
+// crearArchivo crea la carpeta del dia (zona horaria configurada) y el archivo con
 // nombre sin colision -- se llama una sola vez, recien cuando llega el
 // primer documento (ver Add).
 func (s *StreamWriter) crearArchivo() error {

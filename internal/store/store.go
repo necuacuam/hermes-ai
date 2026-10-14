@@ -1,10 +1,8 @@
-// Package store define la interfaz que separa la logica de negocio (grafo,
-// reporting) de donde viven los datos realmente. Hoy la unica
-// implementacion es un mock en memoria (mockstore) porque todavia no hay
-// acceso a Mongo de UAT. Cuando llegue el acceso, la idea es escribir una
-// implementacion mongostore.New(uri) que satisfaga esta misma interfaz --
-// el resto del codigo (graph, reporting, los tools) no deberia necesitar
-// ningun cambio.
+// Package store define como se ejecutan las consultas contra la base
+// (PipelineRunner, implementado por mongostore) y las valida antes de
+// ejecutarlas (pipeline_guard.go). reporting es el unico camino a los datos
+// (2026-10-07: se quito la tool seek, y con ella la interfaz Store de
+// busqueda por nombre/hijos/ucode y su implementacion en memoria).
 package store
 
 import (
@@ -15,50 +13,18 @@ import (
 	"hermes-mcp/internal/domain"
 )
 
-type Store interface {
-	// FindByNameAndType busca documentos de un tipo dado cuyo Name
-	// contenga needle (sin distinguir mayusculas). En Mongo real esto
-	// seria un $regex case-insensitive (o mejor, un indice de texto) sobre
-	// el campo de nombre de negocio (longName/accountName/customerName
-	// segun la entidad).
-	FindByNameAndType(ctx context.Context, needle string, t domain.EntityType) ([]domain.Document, error)
-
-	// FindChildren devuelve los documentos cuyo ParentUCode == parentUCode,
-	// de cualquier tipo. En Mongo real: find({parentUCode: X}) en la
-	// coleccion correspondiente -- OJO que en Mongo real cada tipo tiene su
-	// propia coleccion, asi que la implementacion real tiene que consultar
-	// varias colecciones (o mantener un indice invertido); el mock, al
-	// tener todo en una sola lista en memoria, no tiene ese problema.
-	FindChildren(ctx context.Context, parentUCode string) ([]domain.Document, error)
-
-	// Get busca un documento puntual por ucode. Devuelve found=false si no
-	// existe.
-	Get(ctx context.Context, ucode string) (doc domain.Document, found bool, err error)
-}
-
-// PipelineRunner es una capacidad OPCIONAL y separada de Store: ejecuta un
-// pipeline de agregacion Mongo ya armado por el subagente (con ayuda de
-// "diccionario_de_campos" y "relacion_entre_entidades"), arrancando en una
-// coleccion dada. Existe aparte de Store porque conceptualmente es otra
-// cosa -- Store resuelve/camina la jerarquia de entidades con metodos
-// fijos y acotados; PipelineRunner ejecuta lo que el subagente decida, dato
-// que se acordo explicitamente con TAvo (2026-09-11): la tool de reporting
-// ya no exige un rootUcode resuelto de antemano, el pipeline puede filtrar
-// por lo que haga falta directamente.
-//
-// SOLO mongostore la implementa -- mockstore no, porque interpretar un
-// subconjunto de la sintaxis de agregacion de Mongo sobre structs Go en
-// memoria no vale la pena para este alcance (los tests de "reporting" que
-// necesiten un pipeline real corren contra un Mongo de prueba, no contra
-// mockstore). El caller (ver internal/tools) debe hacer un type assertion
-// contra esta interfaz y devolver un error claro si el Store activo no la
-// implementa.
+// PipelineRunner ejecuta un pipeline de agregacion Mongo ya armado por el
+// agente (con ayuda de "diccionario_de_campos" y
+// "relacion_entre_entidades"), arrancando en una coleccion dada -- ver la
+// decision del 2026-09-11: la tool de reporting no exige un rootUcode
+// resuelto de antemano, el pipeline puede filtrar por lo que haga falta
+// directamente. La implementa mongostore.
 type PipelineRunner interface {
 	// RunPipeline ejecuta pipeline (lista de etapas, cada una un mapa de un
 	// solo operador, ej. {"$match": {...}}) arrancando en la coleccion
 	// Mongo que corresponda a t (ver domain.CollectionName). Devuelve los
 	// documentos resultantes como mapas genericos (bson.M serializado a
-	// JSON), no como domain.Document -- el pipeline puede proyectar
+	// JSON) -- el pipeline puede proyectar
 	// cualquier forma de salida, no necesariamente la forma fija de una
 	// entidad. El caller es responsable de validar el pipeline con
 	// ValidatePipeline ANTES de llamar a este metodo -- RunPipeline no
@@ -84,13 +50,6 @@ type PipelineRunner interface {
 	// iteracion.
 	RunPipelineStream(ctx context.Context, t domain.EntityType, pipeline []json.RawMessage, onDoc func(map[string]interface{}) error) error
 }
-
-// LimiteSeekPorDefecto es la cantidad maxima de candidatos que devuelve la
-// tool "seek" si HERMES_MCP_LIMITE_SEEK no esta seteada (2026-10-06). Antes
-// no tenia tope: un needle muy generico traia todas las entidades de todos
-// los tipos y se las devolvia enteras al agente. Si hay mas, seek lo avisa
-// para que el agente acote la busqueda.
-const LimiteSeekPorDefecto = 50
 
 // ErrStopStream es el error centinela que onDoc puede devolver para pedirle
 // a RunPipelineStream que corte la iteracion sin que eso cuente como una

@@ -109,7 +109,9 @@ var coleccionesPermitidas = func() map[string]bool {
 
 // allowedStages son las etapas de agregacion que este proyecto permite
 // ejecutar. Todas son de lectura -- ninguna escribe en la base ni ejecuta
-// JS arbitrario del lado del servidor.
+// JS arbitrario del lado del servidor. $skip no esta (2026-10-07): solo
+// sirve para paginar, y el agente no puede juntar mas filas de las que
+// entran en pantalla pidiendolas por partes.
 var allowedStages = map[string]bool{
 	"$match":       true,
 	"$project":     true,
@@ -118,7 +120,6 @@ var allowedStages = map[string]bool{
 	"$unset":       true,
 	"$sort":        true,
 	"$limit":       true,
-	"$skip":        true,
 	"$count":       true,
 	"$group":       true,
 	"$unwind":      true,
