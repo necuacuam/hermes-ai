@@ -105,7 +105,22 @@ Las relaciones nuevas se confirmarán con el usuario contra datos reales antes d
 - Qué JSON usa cada instalación se configurará en el cliente de esa instalación.
 - Las credenciales y los JSON reales no se versionarán; sí sus plantillas de ejemplo.
 
-## 7. Cambios
+## 7. Líneas futuras
+
+Decididas, pero no implementadas. Mientras no se implementen, no rigen.
+
+### Enseñar al agente
+
+Ciertos usuarios, con perfil **educador**, podrán enseñarle al agente conocimiento de negocio que no está en el JSON (por ejemplo, qué significa un código).
+
+- **Alcance:** solo información de negocio de propiedades de documentos de colecciones **existentes**: el significado de una propiedad, o una propiedad que existe en los documentos y no está documentada. No se podrán agregar colecciones, entidades, tablas auxiliares ni relaciones, ni cambiar la estructura. Eso sigue el camino de la sección 5.
+- **Proponer no es publicar:** lo enseñado quedará como una propuesta pendiente. Un curador la revisará y la aprobará o rechazará; solo lo aprobado pasará al JSON.
+- Las propuestas cumplirán las mismas reglas del JSON (sección 4): nunca contenido de la base ni instrucciones para el agente.
+- El perfil educador lo controlará el MCP Server según la identidad del usuario, no el prompt. Requiere autenticación de usuarios.
+- **Almacenamiento:** las propuestas y las versiones del JSON se guardarán en Mongo, en una base propia de Hermes AI, nunca en la base consultada. Esa base tendrá un usuario de escritura propio, y la conexión a la base consultada seguirá siendo de solo lectura.
+- **Versiones:** cada aprobación generará una versión nueva del JSON, con su autor, su fecha y las propuestas que incluye. El MCP Server cargará la versión activa, y volver atrás será activar una versión anterior.
+
+## 8. Cambios
 
 Este documento es la constitución de Hermes AI. No podrá ser cambiado a menos que se decida agregar o quitar funcionalidades.
 
