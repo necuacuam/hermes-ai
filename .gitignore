@@ -25,3 +25,7 @@ relaciones/*.json
 # Config de Mongo local para desarrollo -- no hace falta en el repo, cada
 # quien levanta su propio Mongo local siguiendo el README.
 docker-compose.yml
+
+# Lab con Docker: configuracion real y salidas (ver lab/hermes-mcp.env.example).
+lab/hermes-mcp.env
+lab/salidas/

@@ -97,3 +97,7 @@ Decidido, sin implementar (ver la constitución, sección 7): un perfil educador
 ## 2026-10-15 — Protocolo MCP con `mark3labs/mcp-go`
 
 El protocolo MCP estaba implementado a mano, para no depender de librerías externas en una red corporativa restringida. Al pasar el código al repositorio corporativo ese motivo dejó de aplicar, y se reemplazó por la librería `mark3labs/mcp-go`, a pedido de quienes van a desplegarlo. Por ahora solo con stdio; el transporte HTTP queda para el despliegue. Para minimizar y estandarizar el código, las herramientas se registran directamente en la librería y usan sus tipos; el paquete propio `internal/mcp` desapareció. Los argumentos de las herramientas se siguen recibiendo como texto original, para conservar el orden de las claves del pipeline. La librería exige Go 1.25.5 o superior.
+
+## 2026-10-16 — Transporte HTTP y lab con Open WebUI
+
+El servidor puede atender también por HTTP (`HERMES_MCP_TRANSPORTE=http`), con el transporte "Streamable HTTP" de `mcp-go`; stdio sigue siendo el modo por defecto, así que Claude Desktop no cambia. Se agregó una imagen de Docker y un lab local (`lab/`) con Open WebUI, contra la misma base aprobada para las pruebas. La configuración y el fichero de conocimiento no van dentro de la imagen: se montan al arrancar, para que cambiarlos no exija reconstruirla. El HTTP todavía no tiene autenticación: es el primer paso hacia el despliegue con Entra ID y la escritura en OneDrive del usuario.

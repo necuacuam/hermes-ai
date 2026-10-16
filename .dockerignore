@@ -1,0 +1,14 @@
+# Nada de configuracion real, datos ni binarios en la imagen.
+.git/
+.env
+*.exe
+hermes-mcp
+dist-linux/
+generatedfiles/
+salidas/
+relaciones/
+lab/
+docs/
+prompts/
+seed/
+scripts/

@@ -1,6 +1,7 @@
-// Comando hermes-mcp: el MCP Server de Hermes AI. Se comunica por stdio
-// (lo que espera Claude Desktop de un servidor MCP local) y solo ejecuta
-// consultas de lectura contra MongoDB (ver store.ValidatePipeline).
+// Comando hermes-mcp: el MCP Server de Hermes AI. Solo ejecuta consultas de
+// lectura contra MongoDB (ver store.ValidatePipeline). Se comunica por stdio
+// (lo que espera Claude Desktop de un servidor MCP local) o por HTTP
+// (HERMES_MCP_TRANSPORTE=http, para clientes remotos como Open WebUI).
 //
 // Configuracion (detalle en docs/03-instalacion-y-configuracion.md):
 //   - HERMES_MCP_MONGO_URI, obligatoria, y el resto de las variables de
@@ -33,6 +34,10 @@ import (
 // timeoutPorDefecto es el tiempo maximo de toda ejecucion de un pipeline si
 // HERMES_MCP_MONGO_TIMEOUT no esta definida.
 const timeoutPorDefecto = 30 * time.Second
+
+// direccionHTTPPorDefecto es donde escucha el transporte HTTP si
+// HERMES_MCP_HTTP_DIRECCION no esta definida.
+const direccionHTTPPorDefecto = ":8080"
 
 // resolverRutaConfig busca una ruta de configuracion (por ejemplo
 // HERMES_MCP_RELACIONES_PATH) con el mismo criterio que loadDotEnv: si es
@@ -191,7 +196,22 @@ func main() {
 
 	logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
 
-	if err := server.ServeStdio(s, server.WithErrorLogger(logger)); err != nil {
+	switch transporte := os.Getenv("HERMES_MCP_TRANSPORTE"); transporte {
+	case "", "stdio":
+		err = server.ServeStdio(s, server.WithErrorLogger(logger))
+	case "http":
+		// Sin autenticacion todavia: no exponer fuera de una red de
+		// confianza (ver docs/03-instalacion-y-configuracion.md).
+		direccion := os.Getenv("HERMES_MCP_HTTP_DIRECCION")
+		if direccion == "" {
+			direccion = direccionHTTPPorDefecto
+		}
+		logger.Printf("MCP por HTTP en %s/mcp", direccion)
+		err = server.NewStreamableHTTPServer(s).Start(direccion)
+	default:
+		logger.Fatalf("HERMES_MCP_TRANSPORTE=%q invalida -- usar \"stdio\" o \"http\"", transporte)
+	}
+	if err != nil {
 		logger.Fatalf("error fatal: %v", err)
 	}
 }

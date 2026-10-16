@@ -1,0 +1,32 @@
+# Lab local: Open WebUI + hermes-mcp por HTTP, contra la Mongo de siempre
+# (la del equipo, no se levanta otra). Pasos: docs/03-instalacion-y-configuracion.md,
+# seccion "Lab con Open WebUI".
+name: hermes-ai-lab
+
+services:
+  hermes-mcp:
+    build: ..
+    env_file: hermes-mcp.env
+    environment:
+      HERMES_MCP_RELACIONES_PATH: /relaciones/relaciones.json
+    volumes:
+      - ../relaciones:/relaciones:ro
+      - ./salidas:/salidas
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Publicado solo en el propio equipo, para pruebas. Sin autenticacion
+    # todavia: nunca publicarlo hacia la red.
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:v0.9.2
+    ports:
+      - "127.0.0.1:3000:8080"
+    volumes:
+      - open-webui:/app/backend/data
+    depends_on:
+      - hermes-mcp
+
+volumes:
+  open-webui:

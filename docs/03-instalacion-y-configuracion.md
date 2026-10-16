@@ -44,6 +44,8 @@ Una variable definida en el entorno real tiene prioridad sobre el `.env`.
 | `HERMES_MCP_LIMITE_PANTALLA` | Máximo de filas que `reporting` devuelve al agente. El agente no lo puede cambiar. | `.env` | `10` |
 | `HERMES_MCP_MONGO_TIMEOUT` | Tiempo máximo por consulta (formato `30s`, `2m`). MongoDB también lo recibe (`maxTimeMS`). | `.env` | `30s` |
 | `HERMES_MCP_ZONA_HORARIA` | Zona horaria de la carpeta del día donde se guardan los archivos. | `.env` | `Europe/Madrid` |
+| `HERMES_MCP_TRANSPORTE` | `stdio` (Claude Desktop) o `http` (clientes remotos, como Open WebUI). | `.env` o entorno | `stdio` |
+| `HERMES_MCP_HTTP_DIRECCION` | Dirección donde escucha el transporte HTTP. El servidor atiende en la ruta `/mcp`. | `.env` o entorno | `:8080` |
 
 La carpeta de salidas puede contener datos reales: no se versiona.
 
@@ -80,6 +82,33 @@ Puede haber varios ficheros (uno por entorno o versión); `HERMES_MCP_RELACIONES
    - `agente-hermes-tecnico-prompt.md`: perfil **negocio + técnico**. Muestra los nombres reales y la consulta si se la piden, y ante una ambigüedad trae todos los candidatos.
 
 Los dos usan las mismas herramientas y las mismas restricciones: cambia solo el estilo de interacción.
+
+## Lab con Open WebUI
+
+Un entorno local con Docker para probar Hermes AI con Open WebUI: `hermes-mcp` por HTTP en un contenedor, Open WebUI en otro, y la misma base MongoDB de siempre (no se levanta otra). Los ficheros están en `lab/`.
+
+> **El transporte HTTP todavía no tiene autenticación.** El lab publica los dos servicios solo en el propio equipo (`127.0.0.1`). Nunca publicarlos hacia la red.
+
+1. Crear `lab/hermes-mcp.env` a partir de `lab/hermes-mcp.env.example`: la misma conexión del `.env`, pero con `host.docker.internal` en lugar de `localhost`, que es como se alcanza la base del equipo desde un contenedor. No se versiona.
+2. Desde `lab/`, levantar todo (la primera vez descarga la imagen de Open WebUI, de varios GB):
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. Abrir `http://localhost:3000` y crear el usuario administrador (el primero que se registra).
+4. En la administración de Open WebUI:
+   - **Conexión al modelo:** la API del modelo que se use, con su clave.
+   - **Servidor de herramientas:** en el **panel de administración** (*Admin Panel → Settings → External Tools*), no en los ajustes del usuario ni en *Workspace → Tools*. Tipo **MCP (Streamable HTTP)**, no OpenAPI; URL `http://hermes-mcp:8080/mcp`. Como el servidor todavía no revisa la autenticación, elegir *None* o Bearer con **cualquier valor no vacío**: con la clave vacía, Open WebUI envía una cabecera `Authorization` inválida y la conexión falla.
+   - **Modelo con el prompt:** en *Workspace → Models*, un modelo propio por perfil: modelo base (uno grande, de uso diario), system prompt `prompts/agente-hermes-tecnico-prompt.md` (o el de negocio) y el servidor de herramientas habilitado. Sin el prompt, las respuestas fallan: el prompt es parte del despliegue. En el chat se elige ese modelo propio, no el modelo base.
+   - **Llamada a funciones nativa:** en los parámetros avanzados del modelo, *Function Calling* en **Native**. En el modo por defecto, Open WebUI llama a una sola herramienta y le pasa el resultado como contexto: el agente no puede encadenar el diccionario, las relaciones y `reporting`, y termina respondiendo sin datos.
+   - **Perfiles por grupo:** cada modelo propio, privado y con acceso solo para el grupo de usuarios de su perfil.
+
+   Los nombres exactos de los menús dependen de la versión de Open WebUI.
+
+El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cambiarlo, editar el archivo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.
+
+Para probar el servidor sin Open WebUI, el contenedor también responde en `http://127.0.0.1:8081/mcp`.
 
 ## Linux y Open WebUI
 

@@ -43,5 +43,7 @@ prompts/                     system prompts de los agentes
 relaciones/                  ficheros de conocimiento (solo *.example.json se versiona)
 scripts/                     arranque en Windows y compilación para Linux
 seed/                        datos de prueba para una base de desarrollo vacía
+lab/                         lab local con Docker: hermes-mcp por HTTP + Open WebUI
 docs/                        documentación
+Dockerfile                   imagen de hermes-mcp con transporte HTTP
 ```
