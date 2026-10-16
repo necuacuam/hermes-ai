@@ -101,3 +101,7 @@ El protocolo MCP estaba implementado a mano, para no depender de librerías exte
 ## 2026-10-16 — Transporte HTTP y lab con Open WebUI
 
 El servidor puede atender también por HTTP (`HERMES_MCP_TRANSPORTE=http`), con el transporte "Streamable HTTP" de `mcp-go`; stdio sigue siendo el modo por defecto, así que Claude Desktop no cambia. Se agregó una imagen de Docker y un lab local (`lab/`) con Open WebUI, contra la misma base aprobada para las pruebas. La configuración y el fichero de conocimiento no van dentro de la imagen: se montan al arrancar, para que cambiarlos no exija reconstruirla. El HTTP todavía no tiene autenticación: es el primer paso hacia el despliegue con Entra ID y la escritura en OneDrive del usuario.
+
+## 2026-10-16 — Lab: login con Entra ID y perfiles por grupo
+
+Open WebUI inicia sesión con Microsoft Entra ID (registro de aplicación en un directorio propio, solo para el lab). Los perfiles se arman con grupos de Open WebUI, y cada grupo necesita acceso tanto al modelo de su perfil como a la conexión con `hermes-mcp`. Probado con un usuario del directorio: ve solo su modelo y obtiene los mismos resultados que el administrador. Cuando a ese usuario le faltó el acceso a la conexión, el agente no inventó datos: avisó que las herramientas no devolvían nada.

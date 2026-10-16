@@ -28,4 +28,5 @@ docker-compose.yml
 
 # Lab con Docker: configuracion real y salidas (ver lab/hermes-mcp.env.example).
 lab/hermes-mcp.env
+lab/open-webui.env
 lab/salidas/

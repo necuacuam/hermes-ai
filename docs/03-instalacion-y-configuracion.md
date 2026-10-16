@@ -106,6 +106,26 @@ Un entorno local con Docker para probar Hermes AI con Open WebUI: `hermes-mcp` p
 
    Los nombres exactos de los menús dependen de la versión de Open WebUI.
 
+### Login con Microsoft Entra ID
+
+1. En Azure, *Microsoft Entra ID → App registrations → New registration*:
+   - Tipo de cuenta: solo cuentas de este directorio.
+   - URI de redirección, plataforma **Web**: `http://localhost:3000/oauth/microsoft/callback`.
+2. *Token configuration → Add optional claim → ID → `email`*, aceptando el permiso `email` de Microsoft Graph que propone. Open WebUI identifica a cada usuario por su email.
+3. *Certificates & secrets → New client secret*: copiar el **valor** (se muestra una sola vez), no el ID del secreto.
+4. Crear `lab/open-webui.env` a partir de `lab/open-webui.env.example` (no se versiona). Los identificadores salen del *Overview* del registro, y es fácil confundirlos:
+
+   | Variable | Campo del *Overview* |
+   |---|---|
+   | `MICROSOFT_CLIENT_ID` | Application (client) ID |
+   | `MICROSOFT_CLIENT_TENANT_ID` y el `<tenant>` de `OPENID_PROVIDER_URL` | **Directory (tenant) ID**, no el *Object ID* ni el ID de la suscripción |
+
+   Si el tenant está mal, el botón de login da un error 500 y el registro de Open WebUI muestra que Microsoft respondió `AADSTS90002: Tenant not found`.
+5. Recrear Open WebUI (`docker compose up -d open-webui`) y esperar a que arranque: mientras arranca puede responder un 500 pasajero.
+6. Entrar con *Continue with Microsoft*. El primer ingreso de cada usuario queda pendiente: lo aprueba un administrador (el login local sigue activo para eso).
+
+**Perfiles:** en Open WebUI los roles son fijos (administrador, usuario, pendiente); los perfiles se arman con **grupos** (*Admin Panel → Users → Groups*). Cada grupo necesita acceso en **dos lugares**: al modelo de su perfil (*Workspace → Models*) y a la conexión del servidor de herramientas (*Admin Panel → Settings → External Tools*). Con acceso al modelo pero no a la conexión, el agente ve las herramientas pero sus llamadas no devuelven nada.
+
 El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cambiarlo, editar el archivo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.
 
 Para probar el servidor sin Open WebUI, el contenedor también responde en `http://127.0.0.1:8081/mcp`.
