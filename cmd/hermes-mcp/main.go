@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -206,8 +207,17 @@ func main() {
 		if direccion == "" {
 			direccion = direccionHTTPPorDefecto
 		}
+		var opciones []server.StreamableHTTPOption
+		if os.Getenv("HERMES_MCP_DIAGNOSTICO_AUTH") == "true" {
+			// Solo para el lab: registra si llega el token del usuario y
+			// para quien fue emitido, sin el token ni datos personales.
+			opciones = append(opciones, server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+				logger.Printf("diagnostico auth: %s", describirAutorizacion(r.Header.Get("Authorization")))
+				return ctx
+			}))
+		}
 		logger.Printf("MCP por HTTP en %s/mcp", direccion)
-		err = server.NewStreamableHTTPServer(s).Start(direccion)
+		err = server.NewStreamableHTTPServer(s, opciones...).Start(direccion)
 	default:
 		logger.Fatalf("HERMES_MCP_TRANSPORTE=%q invalida -- usar \"stdio\" o \"http\"", transporte)
 	}

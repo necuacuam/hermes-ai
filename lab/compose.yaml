@@ -9,6 +9,9 @@ services:
     env_file: hermes-mcp.env
     environment:
       HERMES_MCP_RELACIONES_PATH: /relaciones/relaciones.json
+      # Etapa 3 del lab: registra si llega el token del usuario y para quien
+      # fue emitido (sin el token ni datos personales).
+      HERMES_MCP_DIAGNOSTICO_AUTH: "true"
     volumes:
       - ../relaciones:/relaciones:ro
       - ./salidas:/salidas

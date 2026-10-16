@@ -124,6 +124,16 @@ Un entorno local con Docker para probar Hermes AI con Open WebUI: `hermes-mcp` p
 5. Recrear Open WebUI (`docker compose up -d open-webui`) y esperar a que arranque: mientras arranca puede responder un 500 pasajero.
 6. Entrar con *Continue with Microsoft*. El primer ingreso de cada usuario queda pendiente: lo aprueba un administrador (el login local sigue activo para eso).
 
+### Token del usuario hacia hermes-mcp
+
+Para que `hermes-mcp` sepa quién pregunta (y, más adelante, actúe en su nombre), Open WebUI le reenvía el token del usuario:
+
+1. En Azure, un segundo registro para la API de `hermes-mcp` (sin URI de redirección). En *Expose an API*: el *Application ID URI* (`api://<client-id>`), un scope `access_as_user` y, como aplicación cliente autorizada, el client ID de Open WebUI.
+2. En `lab/open-webui.env`, `MICROSOFT_OAUTH_SCOPE` con ese scope, para que el token se emita para `hermes-mcp` y no para Microsoft Graph. Un token emitido para Graph no lo puede validar nadie más que Graph, ni sirve para el flujo On-Behalf-Of.
+3. En la conexión del servidor de herramientas, Auth **OAuth**. Después, cerrar sesión y volver a entrar.
+
+Con `HERMES_MCP_DIAGNOSTICO_AUTH=true` (activado en el lab), `hermes-mcp` registra si llega el token y para quién fue emitido (`aud`, `scp`, `tid`), sin el token ni datos personales. Lo esperado: `aud=api://<client-id-de-hermes-mcp>` y `scp=access_as_user`.
+
 **Perfiles:** en Open WebUI los roles son fijos (administrador, usuario, pendiente); los perfiles se arman con **grupos** (*Admin Panel → Users → Groups*). Cada grupo necesita acceso en **dos lugares**: al modelo de su perfil (*Workspace → Models*) y a la conexión del servidor de herramientas (*Admin Panel → Settings → External Tools*). Con acceso al modelo pero no a la conexión, el agente ve las herramientas pero sus llamadas no devuelven nada.
 
 El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cambiarlo, editar el archivo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.

@@ -105,3 +105,7 @@ El servidor puede atender también por HTTP (`HERMES_MCP_TRANSPORTE=http`), con 
 ## 2026-10-16 — Lab: login con Entra ID y perfiles por grupo
 
 Open WebUI inicia sesión con Microsoft Entra ID (registro de aplicación en un directorio propio, solo para el lab). Los perfiles se arman con grupos de Open WebUI, y cada grupo necesita acceso tanto al modelo de su perfil como a la conexión con `hermes-mcp`. Probado con un usuario del directorio: ve solo su modelo y obtiene los mismos resultados que el administrador. Cuando a ese usuario le faltó el acceso a la conexión, el agente no inventó datos: avisó que las herramientas no devolvían nada.
+
+## 2026-10-16 — Lab: el token del usuario llega a hermes-mcp
+
+Con Auth OAuth en la conexión, Open WebUI reenvía el token del usuario a `hermes-mcp`. Al principio llegaba emitido para Microsoft Graph, que no sirve: no se puede validar ni cambiar por permisos en nombre del usuario. Se registró `hermes-mcp` como API en Entra (scope `access_as_user`) y Open WebUI pide el token para ella. Verificado con un diagnóstico opcional que registra el destinatario y los permisos del token, nunca el token ni datos personales.
