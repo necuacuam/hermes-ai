@@ -109,3 +109,9 @@ Open WebUI inicia sesión con Microsoft Entra ID (registro de aplicación en un 
 ## 2026-10-16 — Lab: el token del usuario llega a hermes-mcp
 
 Con Auth OAuth en la conexión, Open WebUI reenvía el token del usuario a `hermes-mcp`. Al principio llegaba emitido para Microsoft Graph, que no sirve: no se puede validar ni cambiar por permisos en nombre del usuario. Se registró `hermes-mcp` como API en Entra (scope `access_as_user`) y Open WebUI pide el token para ella. Verificado con un diagnóstico opcional que registra el destinatario y los permisos del token, nunca el token ni datos personales.
+
+## 2026-10-16 — Archivos en el OneDrive del usuario
+
+Con transporte HTTP, `reporting` puede guardar los archivos en el OneDrive del usuario, en la carpeta de la aplicación, y devolver un enlace; la copia local se borra. Se eligió el permiso delegado `Files.ReadWrite.AppFolder` con el flujo On-Behalf-Of (MSAL): la aplicación actúa en nombre del usuario y solo ve su propia carpeta. Un permiso de aplicación (`Files.ReadWrite.All`) habría dado acceso al OneDrive de todos. El intercambio se hace contra el tenant que emitió el token, con una lista opcional de tenants permitidos.
+
+En el lab quedó probado todo salvo la escritura: el tenant de prueba no tiene licencias de Microsoft 365 (Graph respondió `Tenant does not have a SPO license`), y con cuentas personales el login rechazó el scope de la API (`invalid_scope`). La escritura se probará en el entorno corporativo, con cuentas de trabajo. Plan B si la empresa no permite escribir en el OneDrive de los usuarios: Azure Blob Storage con enlaces de descarga que vencen.

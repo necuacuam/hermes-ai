@@ -4,8 +4,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -79,7 +82,7 @@ func TestReporting_LimiteDePantallaFijoDelServidor(t *testing.T) {
 	}
 	for nombre, args := range casos {
 		r := &runnerFalso{total: 25}
-		texto, esError := llamar(t, reportingHandler(r, t.TempDir(), 10, time.Minute), args)
+		texto, esError := llamar(t, reportingHandler(r, t.TempDir(), 10, time.Minute, nil), args)
 		if esError {
 			t.Fatalf("%s: error inesperado: %s", nombre, texto)
 		}
@@ -159,7 +162,7 @@ func TestSchemasTiposDesdeRegistro(t *testing.T) {
 func TestProtocolo_HerramientasYOrdenDeClaves(t *testing.T) {
 	r := &runnerFalso{total: 3}
 	s := server.NewMCPServer("prueba", "0", server.WithToolCapabilities(false), server.WithInstructions(Instrucciones))
-	RegisterAll(s, r, t.TempDir(), 10, time.Minute, dictionary.RelationsData{})
+	RegisterAll(s, r, t.TempDir(), 10, time.Minute, dictionary.RelationsData{}, nil)
 
 	entradaR, entradaW := io.Pipe()
 	salidaR, salidaW := io.Pipe()
@@ -215,5 +218,51 @@ func TestProtocolo_HerramientasYOrdenDeClaves(t *testing.T) {
 	}
 	if primera := string(r.ultimo[0]); !strings.Contains(primera, `{"puntos":-1,"centroUcode":1}`) {
 		t.Errorf("el $sort no llego con el orden original: %s", primera)
+	}
+}
+
+// destinoFalso registra lo que recibe y comprueba que el archivo local
+// exista en el momento de subirlo.
+type destinoFalso struct {
+	carpeta, nombre string
+	existia         bool
+	falla           bool
+}
+
+func (d *destinoFalso) Guardar(_ context.Context, carpeta, nombre, ruta string) (string, error) {
+	d.carpeta, d.nombre = carpeta, nombre
+	_, err := os.Stat(ruta)
+	d.existia = err == nil
+	if d.falla {
+		return "", errors.New("mysite not found")
+	}
+	return "https://onedrive.example/" + nombre, nil
+}
+
+// Con destino, el archivo se sube, la copia local se borra y el agente
+// recibe el enlace; si la subida falla, recibe un error claro.
+func TestReporting_ArchivoAlDestino(t *testing.T) {
+	args := `{"coleccionInicial":"punto","modo":"listado","guardarEnArchivo":true,"nombreSugerido":"clases","pipeline":[{"$match":{}}]}`
+	for _, falla := range []bool{false, true} {
+		dir := t.TempDir()
+		d := &destinoFalso{falla: falla}
+		texto, esError := llamar(t, reportingHandler(&runnerFalso{total: 3}, dir, 10, time.Minute, d), args)
+
+		if !d.existia || d.nombre != "clases.json" || len(d.carpeta) != len("2006-01-02") {
+			t.Errorf("falla=%v: el destino recibio carpeta=%q nombre=%q existia=%v", falla, d.carpeta, d.nombre, d.existia)
+		}
+		if quedan, _ := os.ReadDir(filepath.Join(dir, d.carpeta)); len(quedan) != 0 {
+			t.Errorf("falla=%v: la copia local no se borro: %v", falla, quedan)
+		}
+		if falla {
+			if !esError || !strings.Contains(texto, "OneDrive") {
+				t.Errorf("se esperaba un error de OneDrive: %s", texto)
+			}
+			continue
+		}
+		var out reporting.Result
+		if esError || json.Unmarshal([]byte(texto), &out) != nil || out.ArchivoEscrito != "https://onedrive.example/clases.json" {
+			t.Errorf("el resultado tendria que traer el enlace: %s", texto)
+		}
 	}
 }

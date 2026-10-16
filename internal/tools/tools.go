@@ -11,6 +11,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -27,13 +29,20 @@ import (
 // Instrucciones es lo que el servidor le dice al cliente al conectarse.
 const Instrucciones = "Servidor MCP de entidades Hermes tipo cuenta (holding/grupo/cliente/centro/punto/direccion) y vendedores (salesPerson). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo."
 
+// DestinoArchivos guarda fuera del servidor el archivo que escribio
+// reporting (por ejemplo, en el OneDrive del usuario) y devuelve su enlace.
+type DestinoArchivos interface {
+	Guardar(ctx context.Context, carpeta, nombre, rutaLocal string) (string, error)
+}
+
 // RegisterAll registra las tres herramientas. limitePantalla y
 // pipelineTimeout (HERMES_MCP_LIMITE_PANTALLA y HERMES_MCP_MONGO_TIMEOUT)
-// son los dos topes de recursos de toda ejecucion de un pipeline.
-func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
+// son los dos topes de recursos de toda ejecucion de un pipeline. destino
+// puede ser nil: los archivos quedan en salidasDir.
+func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData, destino DestinoArchivos) {
 	registerDictionary(s, rel)
 	registerRelation(s, rel)
-	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout)
+	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout, destino)
 }
 
 // argumentos devuelve los argumentos de la llamada tal como llegaron en el
@@ -268,20 +277,22 @@ func reportingSchema(limitePantalla int) json.RawMessage {
 	}`))
 }
 
-func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) {
+func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, destino DestinoArchivos) {
 	s.AddTool(mcp.NewToolWithRawSchema(
 		"reporting",
 		"Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+strconv.Itoa(limitePantalla)+" filas (limite fijo del servidor, con aviso explicito si hay mas) y/o un archivo JSON con el resultado completo.",
 		reportingSchema(limitePantalla),
-	), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout))
+	), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout, destino))
 }
 
 // reportingHandler es el handler de la tool reporting, aparte de
 // registerReporting para poder testearlo con un PipelineRunner falso.
 // limitePantalla es el maximo de filas en pantalla: lo fija la
 // configuracion (HERMES_MCP_LIMITE_PANTALLA) y ningun argumento lo cambia;
-// un "limitePantalla" que mande el agente se ignora.
-func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) server.ToolHandlerFunc {
+// un "limitePantalla" que mande el agente se ignora. Si hay destino, el
+// archivo se sube ahi, se borra la copia local y el resultado trae el
+// enlace en vez de la ruta.
+func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, destino DestinoArchivos) server.ToolHandlerFunc {
 	if limitePantalla <= 0 {
 		limitePantalla = reporting.LimitePantallaPorDefecto
 	}
@@ -315,6 +326,9 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 
 		coleccion := domain.EntityType(args.ColeccionInicial)
 
+		// La subida del archivo no cuenta para el tiempo maximo de la
+		// consulta: usa el contexto de la llamada.
+		ctxLlamada := ctx
 		ctx, cancel := context.WithTimeout(ctx, pipelineTimeout)
 		defer cancel()
 
@@ -370,6 +384,16 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 
 		if err != nil {
 			return mcp.NewToolResultError("error ejecutando el pipeline (¿se agoto el timeout de " + pipelineTimeout.String() + "?): " + err.Error()), nil
+		}
+
+		if destino != nil && result.ArchivoEscrito != "" {
+			ruta := result.ArchivoEscrito
+			enlace, err := destino.Guardar(ctxLlamada, filepath.Base(filepath.Dir(ruta)), filepath.Base(ruta), ruta)
+			_ = os.Remove(ruta) // la copia local no queda en el servidor, se haya subido o no
+			if err != nil {
+				return mcp.NewToolResultError("la consulta se ejecuto, pero no se pudo guardar el archivo en el OneDrive del usuario: " + err.Error()), nil
+			}
+			result.ArchivoEscrito = enlace
 		}
 
 		b, _ := json.MarshalIndent(result, "", "  ")

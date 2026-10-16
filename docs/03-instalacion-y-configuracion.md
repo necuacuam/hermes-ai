@@ -134,6 +134,24 @@ Para que `hermes-mcp` sepa quién pregunta (y, más adelante, actúe en su nombr
 
 Con `HERMES_MCP_DIAGNOSTICO_AUTH=true` (activado en el lab), `hermes-mcp` registra si llega el token y para quién fue emitido (`aud`, `scp`, `tid`), sin el token ni datos personales. Lo esperado: `aud=api://<client-id-de-hermes-mcp>` y `scp=access_as_user`.
 
+### Archivos en el OneDrive del usuario
+
+Con transporte HTTP y las variables `HERMES_MCP_ONEDRIVE_*`, `reporting` guarda los archivos en el OneDrive del usuario que pregunta, en la carpeta de la aplicación (`Aplicaciones/<app>/<fecha>/<nombre>.json`), y el agente recibe un enlace. La copia local se borra siempre. Sin esas variables, o en stdio (Claude Desktop), los archivos quedan en la carpeta de salidas como siempre.
+
+1. En el registro de la API de `hermes-mcp`: *API permissions → Microsoft Graph → Delegated → `Files.ReadWrite.AppFolder`* (solo la carpeta de la aplicación, no el resto de los archivos) y *Grant admin consent*. Sin consentimiento previo el intercambio falla, porque en el flujo On-Behalf-Of el usuario nunca ve una pantalla para aceptarlo.
+2. Un secreto propio de ese registro (*Certificates & secrets*), distinto del de Open WebUI.
+3. En `lab/hermes-mcp.env`:
+
+   | Variable | Valor |
+   |---|---|
+   | `HERMES_MCP_ONEDRIVE_CLIENT_ID` | Client ID del registro de `hermes-mcp` |
+   | `HERMES_MCP_ONEDRIVE_SECRETO` | El valor del secreto |
+   | `HERMES_MCP_ONEDRIVE_TENANTS` | Opcional: tenants (claim `tid`) permitidos, separados por comas |
+
+`hermes-mcp` cambia el token del usuario por uno de Graph con el flujo On-Behalf-Of (MSAL), contra el tenant que emitió el token, y sube el archivo por partes.
+
+**El usuario necesita OneDrive,** es decir, una licencia de Microsoft 365. En el lab, el intercambio funcionó y Graph respondió `Tenant does not have a SPO license`, porque el tenant de prueba no tiene licencias: todo el camino quedó probado salvo la escritura final. La prueba con una cuenta personal de Microsoft no fue posible: el login rechaza el scope de la API con `invalid_scope` aun con todo configurado para cuentas personales.
+
 **Perfiles:** en Open WebUI los roles son fijos (administrador, usuario, pendiente); los perfiles se arman con **grupos** (*Admin Panel → Users → Groups*). Cada grupo necesita acceso en **dos lugares**: al modelo de su perfil (*Workspace → Models*) y a la conexión del servidor de herramientas (*Admin Panel → Settings → External Tools*). Con acceso al modelo pero no a la conexión, el agente ve las herramientas pero sus llamadas no devuelven nada.
 
 El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cambiarlo, editar el archivo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.

@@ -27,6 +27,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"hermes-mcp/internal/dictionary"
+	"hermes-mcp/internal/onedrive"
 	"hermes-mcp/internal/reporting"
 	"hermes-mcp/internal/store/mongostore"
 	"hermes-mcp/internal/tools"
@@ -193,11 +194,13 @@ func main() {
 		server.WithToolCapabilities(false),
 		server.WithInstructions(tools.Instrucciones),
 	)
-	tools.RegisterAll(s, ms, salidasDir, limitePantalla, timeout, rel)
+	transporte := os.Getenv("HERMES_MCP_TRANSPORTE")
+	destino := destinoOneDrive(logger, transporte)
+	tools.RegisterAll(s, ms, salidasDir, limitePantalla, timeout, rel, destino)
 
 	logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
 
-	switch transporte := os.Getenv("HERMES_MCP_TRANSPORTE"); transporte {
+	switch transporte {
 	case "", "stdio":
 		err = server.ServeStdio(s, server.WithErrorLogger(logger))
 	case "http":
@@ -207,21 +210,60 @@ func main() {
 		if direccion == "" {
 			direccion = direccionHTTPPorDefecto
 		}
-		var opciones []server.StreamableHTTPOption
-		if os.Getenv("HERMES_MCP_DIAGNOSTICO_AUTH") == "true" {
-			// Solo para el lab: registra si llega el token del usuario y
-			// para quien fue emitido, sin el token ni datos personales.
-			opciones = append(opciones, server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
-				logger.Printf("diagnostico auth: %s", describirAutorizacion(r.Header.Get("Authorization")))
-				return ctx
-			}))
-		}
+		diagnostico := os.Getenv("HERMES_MCP_DIAGNOSTICO_AUTH") == "true"
+		// El token del usuario viaja en el contexto de cada llamada, para
+		// guardar los archivos en su nombre.
+		conToken := server.WithHTTPContextFunc(func(ctx context.Context, r *http.Request) context.Context {
+			cabecera := r.Header.Get("Authorization")
+			if diagnostico {
+				// Solo para el lab: si llega el token y para quien fue
+				// emitido, sin el token ni datos personales.
+				logger.Printf("diagnostico auth: %s", describirAutorizacion(cabecera))
+			}
+			return onedrive.ConToken(ctx, onedrive.TokenDeCabecera(cabecera))
+		})
 		logger.Printf("MCP por HTTP en %s/mcp", direccion)
-		err = server.NewStreamableHTTPServer(s, opciones...).Start(direccion)
+		err = server.NewStreamableHTTPServer(s, conToken).Start(direccion)
 	default:
 		logger.Fatalf("HERMES_MCP_TRANSPORTE=%q invalida -- usar \"stdio\" o \"http\"", transporte)
 	}
 	if err != nil {
 		logger.Fatalf("error fatal: %v", err)
 	}
+}
+
+// destinoOneDrive arma el destino de los archivos de reporting en el
+// OneDrive del usuario si estan HERMES_MCP_ONEDRIVE_CLIENT_ID y
+// HERMES_MCP_ONEDRIVE_SECRETO (registro de hermes-mcp en Entra ID).
+// HERMES_MCP_ONEDRIVE_TENANTS (opcional) limita los tenants de los usuarios,
+// separados por comas. Solo aplica al transporte HTTP, que es el que recibe
+// el token del usuario; sin destino, los archivos quedan en la carpeta de
+// salidas.
+func destinoOneDrive(logger *log.Logger, transporte string) tools.DestinoArchivos {
+	clientID := os.Getenv("HERMES_MCP_ONEDRIVE_CLIENT_ID")
+	secreto := os.Getenv("HERMES_MCP_ONEDRIVE_SECRETO")
+	if clientID == "" && secreto == "" {
+		return nil
+	}
+	if clientID == "" || secreto == "" {
+		logger.Fatalf("OneDrive: faltan variables -- hacen falta HERMES_MCP_ONEDRIVE_CLIENT_ID y HERMES_MCP_ONEDRIVE_SECRETO")
+	}
+	var tenants []string
+	if raw := os.Getenv("HERMES_MCP_ONEDRIVE_TENANTS"); raw != "" {
+		tenants = strings.Split(raw, ",")
+	}
+	if transporte != "http" {
+		logger.Printf("OneDrive configurado pero el transporte no es HTTP: no hay token del usuario, los archivos quedan en la carpeta de salidas")
+		return nil
+	}
+	d, err := onedrive.New(onedrive.Config{
+		ClientID:          clientID,
+		Secreto:           secreto,
+		TenantsPermitidos: tenants,
+	})
+	if err != nil {
+		logger.Fatalf("OneDrive: %v", err)
+	}
+	logger.Printf("archivos de reporting: OneDrive del usuario (carpeta de la aplicacion)")
+	return d
 }
