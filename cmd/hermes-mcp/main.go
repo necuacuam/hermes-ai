@@ -22,8 +22,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/server"
+
 	"hermes-mcp/internal/dictionary"
-	"hermes-mcp/internal/mcp"
 	"hermes-mcp/internal/reporting"
 	"hermes-mcp/internal/store/mongostore"
 	"hermes-mcp/internal/tools"
@@ -182,12 +183,15 @@ func main() {
 		}
 	}
 
-	server := mcp.NewServer("hermes-mcp", "0.3.0-pipeline", logger)
-	tools.RegisterAll(server, ms, salidasDir, limitePantalla, timeout, rel)
+	s := server.NewMCPServer("hermes-mcp", "0.3.0-pipeline",
+		server.WithToolCapabilities(false),
+		server.WithInstructions(tools.Instrucciones),
+	)
+	tools.RegisterAll(s, ms, salidasDir, limitePantalla, timeout, rel)
 
 	logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
 
-	if err := server.Serve(os.Stdin, os.Stdout); err != nil {
+	if err := server.ServeStdio(s, server.WithErrorLogger(logger)); err != nil {
 		logger.Fatalf("error fatal: %v", err)
 	}
 }

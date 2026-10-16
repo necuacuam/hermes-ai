@@ -32,8 +32,7 @@ Después, copiar `.env.example` a `.env`, crear el fichero de conocimiento y reg
 ## Estructura del repositorio
 
 ```
-cmd/hermes-mcp/              punto de entrada y configuración
-internal/mcp/                protocolo MCP sobre stdio
+cmd/hermes-mcp/              punto de entrada, configuración y servidor MCP (librería mark3labs/mcp-go, stdio)
 internal/domain/             registro: entidades, colecciones y tablas auxiliares
 internal/dictionary/         carga y validación del fichero de conocimiento
 internal/store/              validación de pipelines

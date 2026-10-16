@@ -1,5 +1,6 @@
-// Package tools conecta el protocolo MCP (paquete mcp) con dictionary,
-// reporting y store. Registra tres herramientas: diccionario_de_campos y
+// Package tools registra las herramientas en el servidor MCP (libreria
+// mark3labs/mcp-go) y las conecta con dictionary, reporting y store.
+// Registra tres herramientas: diccionario_de_campos y
 // relacion_entre_entidades (no consultan la base) y reporting (ejecuta un
 // pipeline de agregacion), el unico camino a los datos. Las descripciones
 // de las herramientas son el contrato tecnico; como conversar con el
@@ -14,20 +15,40 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
+
 	"hermes-mcp/internal/dictionary"
 	"hermes-mcp/internal/domain"
-	"hermes-mcp/internal/mcp"
 	"hermes-mcp/internal/reporting"
 	"hermes-mcp/internal/store"
 )
 
+// Instrucciones es lo que el servidor le dice al cliente al conectarse.
+const Instrucciones = "Servidor MCP de entidades Hermes tipo cuenta (holding/grupo/cliente/centro/punto/direccion) y vendedores (salesPerson). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo."
+
 // RegisterAll registra las tres herramientas. limitePantalla y
 // pipelineTimeout (HERMES_MCP_LIMITE_PANTALLA y HERMES_MCP_MONGO_TIMEOUT)
 // son los dos topes de recursos de toda ejecucion de un pipeline.
-func RegisterAll(server *mcp.Server, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
-	registerDictionary(server, rel)
-	registerRelation(server, rel)
-	registerReporting(server, runner, salidasDir, limitePantalla, pipelineTimeout)
+func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData) {
+	registerDictionary(s, rel)
+	registerRelation(s, rel)
+	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout)
+}
+
+// argumentos devuelve los argumentos de la llamada tal como llegaron en el
+// mensaje. Hay que usar el texto original, no un mapa decodificado: el
+// orden de las claves importa (por ejemplo, en un $sort por varios campos).
+func argumentos(req mcp.CallToolRequest) (json.RawMessage, error) {
+	switch a := req.GetRawArguments().(type) {
+	case json.RawMessage:
+		return a, nil
+	case nil:
+		return nil, nil
+	default:
+		// Solo pasa si los argumentos no vinieron de un mensaje JSON-RPC.
+		return json.Marshal(a)
+	}
 }
 
 func jsonSchema(schema string) json.RawMessage {
@@ -86,13 +107,12 @@ func dictionarySchema() json.RawMessage {
 	}`))
 }
 
-func registerDictionary(server *mcp.Server, rel dictionary.RelationsData) {
-	server.RegisterTool(
+func registerDictionary(s *server.MCPServer, rel dictionary.RelationsData) {
+	s.AddTool(mcp.NewToolWithRawSchema(
 		"diccionario_de_campos",
 		"Devuelve, por tipo de entidad, los campos con su nombre tecnico y su significado, segun el fichero de conocimiento cargado. No consulta la base.",
 		dictionarySchema(),
-		dictionaryHandler(rel),
-	)
+	), dictionaryHandler(rel))
 }
 
 // campoParaAgente es lo que el agente recibe de cada campo: nombre y
@@ -106,12 +126,16 @@ type campoParaAgente struct {
 
 // dictionaryHandler es el handler de diccionario_de_campos, aparte para
 // poder testearlo.
-func dictionaryHandler(rel dictionary.RelationsData) mcp.ToolHandler {
-	return func(raw json.RawMessage) mcp.CallToolResult {
+func dictionaryHandler(rel dictionary.RelationsData) server.ToolHandlerFunc {
+	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw, err := argumentos(req)
+		if err != nil {
+			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
+		}
 		var args dictionaryArgs
 		if len(raw) > 0 {
 			if err := json.Unmarshal(raw, &args); err != nil {
-				return mcp.ErrorResult("argumentos invalidos: " + err.Error())
+				return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
 			}
 		}
 		result := map[domain.EntityType][]campoParaAgente{}
@@ -123,7 +147,7 @@ func dictionaryHandler(rel dictionary.RelationsData) mcp.ToolHandler {
 			result[t] = out
 		}
 		b, _ := json.MarshalIndent(result, "", "  ")
-		return mcp.TextResult(string(b))
+		return mcp.NewToolResultText(string(b)), nil
 	}
 }
 
@@ -133,16 +157,15 @@ func dictionaryHandler(rel dictionary.RelationsData) mcp.ToolHandler {
 // (internal/domain: tipos, colecciones, tablas auxiliares) con el fichero de
 // conocimiento cargado (relaciones, estructura de campos, origen de los
 // datos).
-func registerRelation(server *mcp.Server, rel dictionary.RelationsData) {
-	server.RegisterTool(
+func registerRelation(s *server.MCPServer, rel dictionary.RelationsData) {
+	s.AddTool(mcp.NewToolWithRawSchema(
 		"relacion_entre_entidades",
 		"Devuelve la estructura de las entidades: tipos, coleccion Mongo de cada tipo y tablas auxiliares habilitadas (del registro tecnico del servidor), y la lista de relaciones (padre, anidamiento, referencia y catalogo, cada una con sus campos de cruce, estado y reglas), la estructura de los documentos, los prefijos de ucode y el origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base.",
 		jsonSchema(`{"type": "object", "properties": {}}`),
-		func(raw json.RawMessage) mcp.CallToolResult {
-			b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")
-			return mcp.TextResult(string(b))
-		},
-	)
+	), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")
+		return mcp.NewToolResultText(string(b)), nil
+	})
 }
 
 // --- Reporting ---
@@ -245,14 +268,12 @@ func reportingSchema(limitePantalla int) json.RawMessage {
 	}`))
 }
 
-func registerReporting(server *mcp.Server, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) {
-
-	server.RegisterTool(
+func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) {
+	s.AddTool(mcp.NewToolWithRawSchema(
 		"reporting",
 		"Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+strconv.Itoa(limitePantalla)+" filas (limite fijo del servidor, con aviso explicito si hay mas) y/o un archivo JSON con el resultado completo.",
 		reportingSchema(limitePantalla),
-		reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout),
-	)
+	), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout))
 }
 
 // reportingHandler es el handler de la tool reporting, aparte de
@@ -260,37 +281,41 @@ func registerReporting(server *mcp.Server, runner store.PipelineRunner, salidasD
 // limitePantalla es el maximo de filas en pantalla: lo fija la
 // configuracion (HERMES_MCP_LIMITE_PANTALLA) y ningun argumento lo cambia;
 // un "limitePantalla" que mande el agente se ignora.
-func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) mcp.ToolHandler {
+func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration) server.ToolHandlerFunc {
 	if limitePantalla <= 0 {
 		limitePantalla = reporting.LimitePantallaPorDefecto
 	}
-	return func(raw json.RawMessage) mcp.CallToolResult {
+	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw, err := argumentos(req)
+		if err != nil {
+			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
+		}
 		var args reportingArgs
 		if err := json.Unmarshal(raw, &args); err != nil {
-			return mcp.ErrorResult("argumentos invalidos: " + err.Error())
+			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
 		}
 		if args.ColeccionInicial == "" || len(args.Pipeline) == 0 || args.Modo == "" {
-			return mcp.ErrorResult("faltan campos obligatorios: 'coleccionInicial', 'pipeline' y 'modo'.")
+			return mcp.NewToolResultError("faltan campos obligatorios: 'coleccionInicial', 'pipeline' y 'modo'."), nil
 		}
 		modo := reporting.Modo(args.Modo)
 		if modo != reporting.ModoConteo && modo != reporting.ModoListado {
-			return mcp.ErrorResult(fmt.Sprintf("modo %q invalido -- usar \"conteo\" o \"listado\"", args.Modo))
+			return mcp.NewToolResultError(fmt.Sprintf("modo %q invalido -- usar \"conteo\" o \"listado\"", args.Modo)), nil
 		}
 
 		if err := store.ValidarClavesUnicas(args.Pipeline); err != nil {
-			return mcp.ErrorResult("pipeline rechazado: " + err.Error())
+			return mcp.NewToolResultError("pipeline rechazado: " + err.Error()), nil
 		}
 		etapas, err := etapasParaValidar(args.Pipeline)
 		if err != nil {
-			return mcp.ErrorResult("pipeline rechazado: " + err.Error())
+			return mcp.NewToolResultError("pipeline rechazado: " + err.Error()), nil
 		}
 		if err := store.ValidatePipeline(etapas); err != nil {
-			return mcp.ErrorResult("pipeline rechazado: " + err.Error())
+			return mcp.NewToolResultError("pipeline rechazado: " + err.Error()), nil
 		}
 
 		coleccion := domain.EntityType(args.ColeccionInicial)
 
-		ctx, cancel := context.WithTimeout(context.Background(), pipelineTimeout)
+		ctx, cancel := context.WithTimeout(ctx, pipelineTimeout)
 		defer cancel()
 
 		var result reporting.Result
@@ -340,14 +365,14 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 			}
 
 		default:
-			return mcp.ErrorResult("no se especifico ningun destino de salida -- hace falta mostrarEnPantalla y/o guardarEnArchivo")
+			return mcp.NewToolResultError("no se especifico ningun destino de salida -- hace falta mostrarEnPantalla y/o guardarEnArchivo"), nil
 		}
 
 		if err != nil {
-			return mcp.ErrorResult("error ejecutando el pipeline (¿se agoto el timeout de " + pipelineTimeout.String() + "?): " + err.Error())
+			return mcp.NewToolResultError("error ejecutando el pipeline (¿se agoto el timeout de " + pipelineTimeout.String() + "?): " + err.Error()), nil
 		}
 
 		b, _ := json.MarshalIndent(result, "", "  ")
-		return mcp.TextResult(string(b))
+		return mcp.NewToolResultText(string(b)), nil
 	}
 }

@@ -4,7 +4,7 @@ Cómo compilar, configurar y conectar el MCP Server a Claude Desktop. Los térmi
 
 ## Requisitos
 
-- Go (la versión de `go.mod`).
+- Go 1.25.5 o superior (lo exige la librería `mark3labs/mcp-go`; ver `go.mod`).
 - Acceso a la base MongoDB de Hermes. Se recomienda un usuario de solo lectura, limitado a las colecciones del registro (ver la [constitución](01-constitucion.md), sección 3).
 - Claude Desktop, para usar los agentes.
 

@@ -82,7 +82,7 @@ Los prompts tienen **solo comportamiento**: no repiten conocimiento del modelo (
 
 ## 4. NL-to-query con schema linking: las herramientas
 
-El MCP Server es un servidor en Go, por stdio (JSON-RPC), con tres herramientas:
+El MCP Server es un servidor en Go, por stdio (JSON-RPC), construido sobre la librería `mark3labs/mcp-go`, con tres herramientas:
 
 | Herramienta | Qué hace | Toca la base |
 |---|---|---|

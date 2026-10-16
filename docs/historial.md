@@ -93,3 +93,7 @@ La documentación se reorganizó en `docs/` (constitución, arquitectura, instal
 ## 2026-10-14 — Línea futura: enseñar al agente
 
 Decidido, sin implementar (ver la constitución, sección 7): un perfil educador podrá proponer conocimiento de negocio de propiedades de colecciones existentes; un curador lo aprueba, y las versiones del JSON se guardan en una base propia de Hermes AI.
+
+## 2026-10-15 — Protocolo MCP con `mark3labs/mcp-go`
+
+El protocolo MCP estaba implementado a mano, para no depender de librerías externas en una red corporativa restringida. Al pasar el código al repositorio corporativo ese motivo dejó de aplicar, y se reemplazó por la librería `mark3labs/mcp-go`, a pedido de quienes van a desplegarlo. Por ahora solo con stdio; el transporte HTTP queda para el despliegue. Para minimizar y estandarizar el código, las herramientas se registran directamente en la librería y usan sus tipos; el paquete propio `internal/mcp` desapareció. Los argumentos de las herramientas se siguen recibiendo como texto original, para conservar el orden de las claves del pipeline. La librería exige Go 1.25.5 o superior.
