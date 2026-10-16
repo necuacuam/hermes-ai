@@ -120,6 +120,24 @@ Ciertos usuarios, con perfil **educador**, podrán enseñarle al agente conocimi
 - **Almacenamiento:** las propuestas y las versiones del JSON se guardarán en Mongo, en una base propia de Hermes AI, nunca en la base consultada. Esa base tendrá un usuario de escritura propio, y la conexión a la base consultada seguirá siendo de solo lectura.
 - **Versiones:** cada aprobación generará una versión nueva del JSON, con su autor, su fecha y las propuestas que incluye. El MCP Server cargará la versión activa, y volver atrás será activar una versión anterior.
 
+### Consultas mixtas y área de trabajo
+
+Hermes AI podrá responder preguntas que combinen datos de bases de datos y de APIs, y cruzarlos entre sí.
+
+**Conector de API**
+- Además de consultar bases de datos, el MCP Server podrá llamar a APIs, creadas para Hermes AI, que escriben sus resultados en una colección del área de trabajo.
+- Las APIs que el agente puede llamar se declararán en el registro del MCP Server (código o configuración), igual que las colecciones. El agente podrá hacer todas las llamadas que necesite, y el MCP Server validará los parámetros de cada una antes de hacerla.
+- El fichero JSON describirá el significado de cada API y de las columnas de la colección que crea, y con qué propiedades de las entidades se puede cruzar.
+
+**Área de trabajo**
+- El área de trabajo vivirá en un servidor de Mongo propio, nunca en las bases consultadas, que seguirán siendo de solo lectura.
+- El agente pedirá a cada API los datos que necesita y le indicará el nombre de la colección del área de trabajo donde dejarlos: un UUID, que no se repite. La API creará esa colección con el resultado.
+- Si necesita datos de la base de un departamento, una función ejecutará el pipeline que haga falta y volcará el resultado en una colección del área de trabajo, también con un UUID.
+- Cuando todas hayan respondido, el agente ejecutará el pipeline final que necesite sobre esas colecciones, con las mismas reglas de validación que las consultas a las bases, y su resultado tendrá el mismo límite de pantalla y el mismo archivo.
+- Las colecciones del área de trabajo se borrarán solas pasado un tiempo.
+
+**Prompts:** indicarán solo el comportamiento, por ejemplo cuándo usar el área de trabajo en lugar de mostrar un resultado directamente. Qué APIs existen y qué significan saldrá siempre del MCP Server.
+
 ## 8. Cambios
 
 Este documento es la constitución de Hermes AI. No podrá ser cambiado a menos que se decida agregar o quitar funcionalidades.
