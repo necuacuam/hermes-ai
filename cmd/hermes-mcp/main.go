@@ -204,8 +204,9 @@ func main() {
 	case "", "stdio":
 		err = server.ServeStdio(s, server.WithErrorLogger(logger))
 	case "http":
-		// Sin autenticacion todavia: no exponer fuera de una red de
-		// confianza (ver docs/03-instalacion-y-configuracion.md).
+		// El token del usuario todavia no se valida: se acepta cualquier
+		// llamada para consultar. No exponer fuera de una red de confianza
+		// (ver docs/03-instalacion-y-configuracion.md).
 		direccion := os.Getenv("HERMES_MCP_HTTP_DIRECCION")
 		if direccion == "" {
 			direccion = direccionHTTPPorDefecto

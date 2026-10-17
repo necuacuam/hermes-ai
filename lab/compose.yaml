@@ -17,8 +17,8 @@ services:
       - ./salidas:/salidas
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Publicado solo en el propio equipo, para pruebas. Sin autenticacion
-    # todavia: nunca publicarlo hacia la red.
+    # Publicado solo en el propio equipo, para pruebas. El token del usuario
+    # todavia no se valida: nunca publicarlo hacia la red.
     ports:
       - "127.0.0.1:8081:8080"
 
