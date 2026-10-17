@@ -90,14 +90,15 @@ Un entorno local con Docker para probar Hermes AI con Open WebUI: `hermes-mcp` p
 > **`hermes-mcp` todavía no valida el token del usuario.** Lo recibe y lo usa para guardar en OneDrive (ahí lo valida Entra ID), pero acepta cualquier llamada, con o sin token, para consultar. Por eso el lab publica los dos servicios solo en el propio equipo (`127.0.0.1`). Nunca publicarlos hacia la red.
 
 1. Crear `lab/hermes-mcp.env` a partir de `lab/hermes-mcp.env.example`: la misma conexión del `.env`, pero con `host.docker.internal` en lugar de `localhost`, que es como se alcanza la base del equipo desde un contenedor. No se versiona.
-2. Desde `lab/`, levantar todo (la primera vez descarga la imagen de Open WebUI, de varios GB):
+2. **Fichero de conocimiento:** el lab usa `relaciones/relaciones.json` del repo (la misma carpeta que Claude Desktop), montado en el contenedor en solo lectura. Si no existe, crearlo como se explica en [Fichero de conocimiento](#fichero-de-conocimiento): no se versiona y, sin él, `hermes-mcp` no arranca. Para usar otro fichero, cambiar `HERMES_MCP_RELACIONES_PATH` en `lab/compose.yaml`.
+3. Desde `lab/`, levantar todo (la primera vez descarga la imagen de Open WebUI, de varios GB):
 
    ```bash
    docker compose up -d --build
    ```
 
-3. Abrir `http://localhost:3000` y crear el usuario administrador (el primero que se registra).
-4. En la administración de Open WebUI:
+4. Abrir `http://localhost:3000` y crear el usuario administrador (el primero que se registra).
+5. En la administración de Open WebUI:
    - **Conexión al modelo:** en *Admin Panel → Settings → Connections*, una conexión de tipo OpenAI. Para Claude: URL `https://api.anthropic.com/v1` (el endpoint compatible con el formato de OpenAI), Auth **Bearer** con la clave de API de Anthropic. La clave conviene crearla en un *workspace* propio de la consola de Anthropic, con un límite de gasto mensual, y usar una clave normal: la federación de identidad no la admite Open WebUI. Las opciones *Session* y *OAuth* de esa conexión no aplican: el proveedor del modelo solo acepta su clave.
    - **Servidor de herramientas:** en el **panel de administración** (*Admin Panel → Settings → External Tools*), no en los ajustes del usuario ni en *Workspace → Tools*. Tipo **MCP (Streamable HTTP)**, no OpenAPI; URL `http://hermes-mcp:8080/mcp`. Auth: **OAuth** cuando el login con Entra ID esté configurado (reenvía el token del usuario; ver más abajo). Antes de eso, como el servidor no valida el token, *None* o Bearer con **cualquier valor no vacío**: con la clave vacía, Open WebUI envía una cabecera `Authorization` inválida y la conexión falla.
    - **Modelo con el prompt:** en *Workspace → Models*, un modelo propio por perfil: modelo base (uno grande, de uso diario), system prompt `prompts/agente-hermes-tecnico-prompt.md` (o el de negocio) y el servidor de herramientas habilitado. Sin el prompt, las respuestas fallan: el prompt es parte del despliegue. En el chat se elige ese modelo propio, no el modelo base.
@@ -154,7 +155,7 @@ Con transporte HTTP y las variables `HERMES_MCP_ONEDRIVE_*`, `reporting` guarda 
 
 **Perfiles:** en Open WebUI los roles son fijos (administrador, usuario, pendiente); los perfiles se arman con **grupos** (*Admin Panel → Users → Groups*). Cada grupo necesita acceso en **dos lugares**: al modelo de su perfil (*Workspace → Models*) y a la conexión del servidor de herramientas (*Admin Panel → Settings → External Tools*). Con acceso al modelo pero no a la conexión, el agente ve las herramientas pero sus llamadas no devuelven nada.
 
-El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cambiarlo, editar el archivo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.
+Para cambiar el fichero de conocimiento, editarlo y reiniciar el contenedor (`docker compose restart hermes-mcp`). Los archivos de `reporting` quedan en `lab/salidas/`, que no se versiona.
 
 Para probar el servidor sin Open WebUI, el contenedor también responde en `http://127.0.0.1:8081/mcp`.
 
