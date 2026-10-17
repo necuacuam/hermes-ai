@@ -158,6 +158,40 @@ El fichero de conocimiento se monta desde `relaciones/` (solo lectura): para cam
 
 Para probar el servidor sin Open WebUI, el contenedor también responde en `http://127.0.0.1:8081/mcp`.
 
+### Recursos creados en Azure (Entra ID)
+
+El lab usa dos registros de aplicación en un directorio propio. No requieren suscripción de pago: solo Entra ID.
+
+**1. Registro de Open WebUI** (el login)
+
+| Apartado | Configuración |
+|---|---|
+| *Authentication* | Plataforma **Web**, URI de redirección `http://localhost:3000/oauth/microsoft/callback` |
+| *Certificates & secrets* | Un secreto (su valor va en `MICROSOFT_CLIENT_SECRET` de `lab/open-webui.env`) |
+| *Token configuration* | Claim opcional `email` en el token de ID |
+| *API permissions* | Microsoft Graph, delegados: `User.Read`, `email` (más `openid` y `profile`, que se conceden en el login). Del registro de `hermes-mcp`: `access_as_user` |
+
+**2. Registro de la API de `hermes-mcp`** (sin URI de redirección)
+
+| Apartado | Configuración |
+|---|---|
+| *Expose an API* | *Application ID URI* `api://<client-id>`; scope `access_as_user` (lo pueden aceptar administradores y usuarios); aplicación cliente autorizada: el registro de Open WebUI |
+| *Certificates & secrets* | Un secreto propio, distinto del de Open WebUI (su valor va en `HERMES_MCP_ONEDRIVE_SECRETO` de `lab/hermes-mcp.env`): con él `hermes-mcp` se identifica en el flujo On-Behalf-Of |
+| *API permissions* | Microsoft Graph, delegados: `User.Read` y `Files.ReadWrite.AppFolder`, con **consentimiento de administrador** (en el flujo On-Behalf-Of el usuario no ve pantalla de consentimiento) |
+| *Manifest* | `api.requestedAccessTokenVersion: 2`; `api.knownClientApplications` con el client ID de Open WebUI (consentimiento combinado) |
+
+**Tipo de cuentas admitidas** (`signInAudience` en el manifiesto de los dos registros): para el lab y el despliegue real, **`AzureADMyOrg`** (solo cuentas del directorio). En la prueba con cuentas personales se cambió a `AzureADandPersonalMicrosoftAccount`; esa prueba se descartó.
+
+**Dónde va cada dato del *Overview*:**
+
+| Dato | Variable |
+|---|---|
+| Client ID de Open WebUI | `MICROSOFT_CLIENT_ID` (`lab/open-webui.env`) |
+| Client ID de `hermes-mcp` | `MICROSOFT_OAUTH_SCOPE` (`api://<client-id>/access_as_user`) y `HERMES_MCP_ONEDRIVE_CLIENT_ID` |
+| *Directory (tenant) ID* | `MICROSOFT_CLIENT_TENANT_ID`, `OPENID_PROVIDER_URL` y, opcionalmente, `HERMES_MCP_ONEDRIVE_TENANTS` |
+
+Los secretos vencen: al renovarlos, actualizar el `.env` correspondiente y recrear el contenedor.
+
 ## Linux y Open WebUI
 
 `scripts/build-linux.ps1` genera la carpeta `dist-linux/` (no versionada) con el ejecutable de Linux, un `.env` y los ficheros de conocimiento, para servirlo a Open WebUI a través de `mcpo`. Si se usa, sus ficheros de conocimiento se mantienen junto con los de `relaciones/`.
