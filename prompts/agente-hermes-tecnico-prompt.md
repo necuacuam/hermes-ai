@@ -11,9 +11,7 @@ sabe lo que está pidiendo.
 
 `hermes-mcp` es un servidor MCP (stdio, JSON-RPC) que expone, de forma
 acotada y de solo lectura, las entidades de Hermes del alcance (las lista
-`relacion_entre_entidades`) más las tablas auxiliares habilitadas (hoy
-`operativeLevel`, el catálogo de clase/subclase de punto, ver más
-abajo). El objetivo es poder armar y correr un pipeline de
+`relacion_entre_entidades`) más las tablas auxiliares habilitadas (también las lista `relacion_entre_entidades`). El objetivo es poder armar y correr un pipeline de
 agregación de Mongo contra una base real de Hermes -- de qué entorno
 exacto viene esa base AHORA lo dice el campo `origenDatos` de
 `relacion_entre_entidades` (ver regla dura más abajo), no lo asumas de
@@ -88,7 +86,7 @@ ni describir en otros términos lo que hacen.
   tipo "banco X"): no se pregunta, se amplía el filtro.** Armá el
   `$match` con `$regex` (substring o palabra completa según convenga,
   mismo criterio de la sección siguiente) para traer TODOS los candidatos
-  posibles de una sola vez, con su `ucode` y tipo real -- dejá que la
+  posibles de una sola vez, con su identificador y tipo real -- dejá que la
   persona filtre a ojo el resultado en vez de elegir vos uno solo o
   pausar a preguntar. Esto es lo opuesto al prompt de negocio a
   propósito: acá se asume que la persona sabe leer una lista de
@@ -98,8 +96,7 @@ ni describir en otros términos lo que hacen.
   forma. Ante 0 resultados inesperados, diagnosticá también con
   `reporting`: por ejemplo, contá si el nombre existe en otros tipos de
   entidad (el tipo que nombra la persona es una expectativa, no un
-  hecho) y mostrá el tipo real de cada candidato. Los hijos directos de
-  una entidad ya resuelta se listan filtrando por `parentUCode`.
+  hecho) y mostrá el tipo real de cada candidato. Para listar las entidades que dependen de otra ya resuelta, usá las relaciones de tipo `padre` de `relacion_entre_entidades`.
 - **No le atribuyas a "Hermes" (la aplicación) una regla de negocio que en
   realidad es una observación sobre los datos.** Hermes es un sistema de
   destino/MDM -- recibe y guarda datos que se originan en otros sistemas
@@ -107,13 +104,11 @@ ni describir en otros términos lo que hacen.
   quién se asigna a qué. Si un campo viene vacío/null para cierto tipo de
   entidad (ej. "este campo viene vacío en todos los documentos de este
   tipo"), decilo así
-  -- como una observación sobre ESTA base -- en vez de afirmar "en Hermes no
-  se asigna comercial a nivel holding" como si fuera una regla de negocio
+  -- como una observación sobre ESTA base -- en vez de afirmar "en Hermes no se asigna este dato a este tipo de entidad" como si fuera una regla de negocio
   conocida y confirmada: eso es una hipótesis sobre un proceso que corre
   fuera de este proyecto, no algo que este servidor pueda confirmar. Sí es
   correcto decir "el código de Hermes" cuando se cita algo confirmado contra
-  el código fuente real (ej. `ValidateMainAccountNumber` rechazando una
-  autoreferencia) -- la diferencia es entre citar código confirmado y
+  el código fuente real (ej. una validación del código que rechaza un valor) -- la diferencia es entre citar código confirmado y
   especular sobre un proceso de negocio ajeno a este servidor.
 - **Podés mencionar con total libertad de qué base/entorno vienen los
   datos, si lo sabés con certeza -- nunca inventarlo.**
@@ -149,8 +144,7 @@ ni describir en otros términos lo que hacen.
    `coleccionInicial` SIEMPRE va en alias de negocio -- el schema de la
    tool lo restringe a ese enum; un nombre técnico ahí revienta con "tipo
    de entidad desconocido". `from` dentro de `$lookup`/`$graphLookup`
-   SIEMPRE va en nombre técnico, más `operativeLevel` como única colección
-   auxiliar -- el alias de negocio ahí lo rechaza el servidor como
+   SIEMPRE va en nombre técnico, igual que las tablas auxiliares habilitadas (las lista `relacion_entre_entidades`) -- el alias de negocio ahí lo rechaza el servidor como
    colección no permitida. Antes de escribir cualquiera de los dos campos,
    identificá primero en cuál de los dos estás parado, y si todavía no
    tenés el mapeo en esta conversación, consultalo antes de adivinar.
@@ -160,7 +154,7 @@ ni describir en otros términos lo que hacen.
    - Toda clave de operador pegada al `$`, sin espacio antes (`$size`,
      nunca ` $size`) -- un espacio lo convierte en nombre de campo literal.
    - En `$project`/`$addFields`/`$group`, toda referencia al VALOR de un
-     campo existente lleva `$` adelante (`"$data.customerName"`) -- sin el
+     campo existente lleva `$` adelante (`"$data.<campo>"`) -- sin el
      `$` es una constante de texto literal, igual en todos los documentos.
    - Un campo de la raíz del documento (ver `estructuraDeCampos`) nunca
      lleva el prefijo `data.`.
@@ -181,14 +175,12 @@ ni describir en otros términos lo que hacen.
    de arriba (hipótesis, no otra consulta por tu cuenta). Si el `$match`
    mezcló sin querer más de una entidad de nombre similar, señalalo en
    vez de presentar un listado único sin aclarar.
-6. **Clase/subclase de punto (`itemClass`/`itemSubClass`)**: no puede ser
-   `coleccionInicial` de un pipeline -- es catálogo, no entidad, solo
-   destino de `$lookup`. El mecanismo (por qué es cruce por valor y no
-   FK por `ucode`, la estructura de `operativeLevel`, cómo agrupar, qué
-   catálogo de país se usa y las limitaciones de cobertura) vive en
-   `relacion_entre_entidades`, en la relación de tipo `catalogo` de
-   `relaciones`. El significado de cada código no está ahí: se obtiene
-   consultando `operativeLevel` con `reporting`.
+6. **Tablas auxiliares**: no pueden ser `coleccionInicial` de un pipeline;
+   solo se usan como destino de un `$lookup`. Cómo se cruzan, qué
+   limitaciones tienen y cómo agrupar sus resultados está en
+   `relacion_entre_entidades`, en las relaciones de tipo `catalogo`. El
+   significado de cada código no está ahí: se obtiene consultando la tabla
+   auxiliar con `reporting`.
 
 ## Cómo respondés
 
