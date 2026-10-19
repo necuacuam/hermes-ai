@@ -101,10 +101,10 @@ func TestReporting_LimiteDePantallaFijoDelServidor(t *testing.T) {
 
 // La descripcion que ve el agente dice el limite real y que no se cambia.
 func TestReporting_SinParametroDeLimiteEnElSchema(t *testing.T) {
-	if strings.Contains(string(reportingSchema(10)), `"limitePantalla"`) {
+	if strings.Contains(string(esquemaDe(t, reportingTool(10))), `"limitePantalla"`) {
 		t.Error("el schema de reporting todavia ofrece el parametro limitePantalla")
 	}
-	if !strings.Contains(string(reportingSchema(10)), "como maximo 10") {
+	if !strings.Contains(string(esquemaDe(t, reportingTool(10))), "como maximo 10") {
 		t.Error("el schema no informa el limite fijo de 10 filas")
 	}
 }
@@ -146,11 +146,11 @@ func TestSchemasTiposDesdeRegistro(t *testing.T) {
 		esperado = append(esperado, string(tp))
 	}
 
-	rep := enumDe(t, reportingSchema(10), "coleccionInicial")
+	rep := enumDe(t, esquemaDe(t, reportingTool(10)), "coleccionInicial")
 	if strings.Join(rep, ",") != strings.Join(esperado, ",") {
 		t.Errorf("enum de coleccionInicial = %v, esperado %v", rep, esperado)
 	}
-	dic := enumDe(t, dictionarySchema(), "tipo")
+	dic := enumDe(t, esquemaDe(t, dictionaryTool()), "tipo")
 	if strings.Join(dic, ",") != ","+strings.Join(esperado, ",") {
 		t.Errorf("enum de tipo = %v, esperado \"\" + %v", dic, esperado)
 	}
@@ -206,7 +206,7 @@ func TestProtocolo_HerramientasYOrdenDeClaves(t *testing.T) {
 	_ = entradaW.Close()
 
 	ini, _ := resp[1]["result"].(map[string]interface{})
-	if instr, _ := ini["instructions"].(string); !strings.Contains(instr, "salesPerson") {
+	if instr, _ := ini["instructions"].(string); instr != Instrucciones {
 		t.Errorf("initialize no trae las instrucciones: %v", resp[1])
 	}
 	lista, _ := resp[2]["result"].(map[string]interface{})
@@ -263,6 +263,28 @@ func TestReporting_ArchivoAlDestino(t *testing.T) {
 		var out reporting.Result
 		if esError || json.Unmarshal([]byte(texto), &out) != nil || out.ArchivoEscrito != "https://onedrive.example/clases.json" {
 			t.Errorf("el resultado tendria que traer el enlace: %s", texto)
+		}
+	}
+}
+
+// esquemaDe devuelve el esquema de parametros de una herramienta como JSON,
+// tal como lo publica el servidor.
+func esquemaDe(t *testing.T, tool mcp.Tool) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatalf("esquema: %v", err)
+	}
+	return b
+}
+
+// Las tres herramientas solo leen, y lo tienen que declarar: los valores por
+// defecto de la libreria las marcarian como destructivas.
+func TestHerramientasDeclaradasDeSoloLectura(t *testing.T) {
+	for _, tool := range []mcp.Tool{dictionaryTool(), reportingTool(10)} {
+		a := tool.Annotations
+		if a.ReadOnlyHint == nil || !*a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint {
+			t.Errorf("%s: anotaciones incorrectas: %+v", tool.Name, a)
 		}
 	}
 }

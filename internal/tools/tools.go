@@ -27,7 +27,7 @@ import (
 )
 
 // Instrucciones es lo que el servidor le dice al cliente al conectarse.
-const Instrucciones = "Servidor MCP de entidades Hermes tipo cuenta (holding/grupo/cliente/centro/punto/direccion) y vendedores (salesPerson). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo."
+const Instrucciones = "Servidor MCP de entidades de Hermes (las lista relacion_entre_entidades). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo."
 
 // DestinoArchivos guarda fuera del servidor el archivo que escribio
 // reporting (por ejemplo, en el OneDrive del usuario) y devuelve su enlace.
@@ -45,29 +45,23 @@ func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir st
 	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout, destino)
 }
 
-// argumentos devuelve los argumentos de la llamada tal como llegaron en el
-// mensaje. Hay que usar el texto original, no un mapa decodificado: el
-// orden de las claves importa (por ejemplo, en un $sort por varios campos).
-func argumentos(req mcp.CallToolRequest) (json.RawMessage, error) {
-	switch a := req.GetRawArguments().(type) {
-	case json.RawMessage:
-		return a, nil
-	case nil:
-		return nil, nil
-	default:
-		// Solo pasa si los argumentos no vinieron de un mensaje JSON-RPC.
-		return json.Marshal(a)
+// soloLectura declara las anotaciones de una herramienta que solo lee: los
+// clientes las usan, por ejemplo, para pedir confirmacion antes de ejecutar
+// algo destructivo. Hay que declararlas: los valores por defecto de la
+// libreria dicen lo contrario (destructiva, no de solo lectura).
+func soloLectura() []mcp.ToolOption {
+	return []mcp.ToolOption{
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
 	}
 }
 
-func jsonSchema(schema string) json.RawMessage {
-	return json.RawMessage(schema)
-}
-
-// tiposEnumJSON arma el "enum" de los schemas desde domain.AllTypes, para
-// que sumar una entidad al registro no exija tocar las herramientas.
+// tiposValores lista los tipos del registro (domain.AllTypes) para los
+// "enum" de las herramientas, para que sumar una entidad no exija tocarlas.
 // conVacio agrega "" al principio (en diccionario_de_campos, vacio = todos).
-func tiposEnumJSON(conVacio bool) string {
+func tiposValores(conVacio bool) []string {
 	vals := []string{}
 	if conVacio {
 		vals = append(vals, "")
@@ -75,8 +69,7 @@ func tiposEnumJSON(conVacio bool) string {
 	for _, t := range domain.AllTypes {
 		vals = append(vals, string(t))
 	}
-	b, _ := json.Marshal(vals)
-	return string(b)
+	return vals
 }
 
 // tiposTexto lista los tipos para una descripcion: "a, b, ... o z".
@@ -98,30 +91,19 @@ type dictionaryArgs struct {
 	Tipo string `json:"tipo"` // un tipo de domain.AllTypes, o "" (todos)
 }
 
-// dictionarySchema arma el schema de diccionario_de_campos con los tipos
-// del registro (domain.AllTypes).
-func dictionarySchema() json.RawMessage {
-	return jsonSchema(strings.NewReplacer(
-		"{{TIPOS_TEXTO}}", tiposTexto(),
-		"{{TIPOS_ENUM}}", tiposEnumJSON(true),
-	).Replace(`{
-		"type": "object",
-		"properties": {
-			"tipo": {
-				"type": "string",
-				"description": "Tipo de entidad a consultar: {{TIPOS_TEXTO}}. Vacio para ver todos.",
-				"enum": {{TIPOS_ENUM}}
-			}
-		}
-	}`))
+// dictionaryTool define diccionario_de_campos, con los tipos del registro.
+func dictionaryTool() mcp.Tool {
+	return mcp.NewTool("diccionario_de_campos", append(soloLectura(),
+		mcp.WithDescription("Devuelve, por tipo de entidad, los campos con su nombre tecnico y su significado, segun el fichero de conocimiento cargado. No consulta la base."),
+		mcp.WithString("tipo",
+			mcp.Description("Tipo de entidad a consultar: "+tiposTexto()+". Vacio para ver todos."),
+			mcp.Enum(tiposValores(true)...),
+		),
+	)...)
 }
 
 func registerDictionary(s *server.MCPServer, rel dictionary.RelationsData) {
-	s.AddTool(mcp.NewToolWithRawSchema(
-		"diccionario_de_campos",
-		"Devuelve, por tipo de entidad, los campos con su nombre tecnico y su significado, segun el fichero de conocimiento cargado. No consulta la base.",
-		dictionarySchema(),
-	), dictionaryHandler(rel))
+	s.AddTool(dictionaryTool(), dictionaryHandler(rel))
 }
 
 // campoParaAgente es lo que el agente recibe de cada campo: nombre y
@@ -137,15 +119,9 @@ type campoParaAgente struct {
 // poder testearlo.
 func dictionaryHandler(rel dictionary.RelationsData) server.ToolHandlerFunc {
 	return func(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		raw, err := argumentos(req)
-		if err != nil {
-			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
-		}
 		var args dictionaryArgs
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &args); err != nil {
-				return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
-			}
+		if err := req.BindArguments(&args); err != nil {
+			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
 		}
 		result := map[domain.EntityType][]campoParaAgente{}
 		for t, campos := range dictionary.Lookup(rel.Campos, domain.EntityType(args.Tipo)) {
@@ -167,11 +143,9 @@ func dictionaryHandler(rel dictionary.RelationsData) server.ToolHandlerFunc {
 // conocimiento cargado (relaciones, estructura de campos, origen de los
 // datos).
 func registerRelation(s *server.MCPServer, rel dictionary.RelationsData) {
-	s.AddTool(mcp.NewToolWithRawSchema(
-		"relacion_entre_entidades",
-		"Devuelve la estructura de las entidades: tipos, coleccion Mongo de cada tipo y tablas auxiliares habilitadas (del registro tecnico del servidor), y la lista de relaciones (padre, anidamiento, referencia y catalogo, cada una con sus campos de cruce, estado y reglas), la estructura de los documentos, los prefijos de ucode y el origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base.",
-		jsonSchema(`{"type": "object", "properties": {}}`),
-	), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.AddTool(mcp.NewTool("relacion_entre_entidades", append(soloLectura(),
+		mcp.WithDescription("Devuelve la estructura de las entidades: tipos, coleccion Mongo de cada tipo y tablas auxiliares habilitadas (del registro tecnico del servidor), y la lista de relaciones (padre, anidamiento, referencia y catalogo, cada una con sus campos de cruce, estado y reglas), la estructura de los documentos, los prefijos de ucode y el origen de los datos de la instalacion ('origenDatos') (del fichero de conocimiento cargado). No consulta la base."),
+	)...), func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		b, _ := json.MarshalIndent(dictionary.Hierarchy(rel), "", "  ")
 		return mcp.NewToolResultText(string(b)), nil
 	})
@@ -235,54 +209,41 @@ func etapasParaValidar(pipeline []json.RawMessage) ([]map[string]interface{}, er
 	return out, nil
 }
 
-// reportingSchema arma el schema de la tool con el limite de pantalla
-// real, para que el agente lo vea en la descripcion de mostrarEnPantalla, y
-// con los tipos de coleccionInicial tomados del registro (domain.AllTypes).
-func reportingSchema(limitePantalla int) json.RawMessage {
-	return jsonSchema(strings.NewReplacer(
-		"{{LIMITE}}", strconv.Itoa(limitePantalla),
-		"{{TIPOS_ENUM}}", tiposEnumJSON(false),
-	).Replace(`{
-		"type": "object",
-		"required": ["coleccionInicial", "pipeline", "modo"],
-		"properties": {
-			"coleccionInicial": {
-				"type": "string",
-				"enum": {{TIPOS_ENUM}},
-				"description": "Tipo de entidad cuya coleccion es el punto de partida del pipeline (ver 'coleccionMongo' en relacion_entre_entidades). Las tablas auxiliares habilitadas pueden usarse como destino de $lookup/$graphLookup, no como punto de partida."
-			},
-			"pipeline": {
-				"type": "array",
-				"items": {"type": "object"},
-				"description": "Etapas de agregacion Mongo en orden, cada una un objeto de un solo operador (ej. {\"$match\": {...}}). Se lee como Extended JSON: admite $uuid, $binary, $date y $oid. Antes de ejecutar, el servidor valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; si no, devuelve un error que indica la etapa rechazada."
-			},
-			"modo": {
-				"type": "string",
-				"enum": ["listado", "conteo"],
-				"description": "'conteo': el pipeline debe terminar en $count o un $group equivalente; 0 documentos equivale a cantidad 0 y mas de un documento es un error; nunca genera archivo. 'listado': devuelve documentos, en pantalla y/o en archivo."
-			},
-			"mostrarEnPantalla": {
-				"type": "boolean",
-				"description": "true para devolver las filas en la respuesta: como maximo {{LIMITE}} (limite fijo del servidor, no se puede cambiar), con aviso explicito si el total es mayor. Para el resultado completo, guardarEnArchivo."
-			},
-			"guardarEnArchivo": {
-				"type": "boolean",
-				"description": "true para guardar el resultado completo en un archivo JSON local, sin el limite de pantalla. Ignorado si modo=conteo. Si el pipeline no devuelve documentos, no se crea archivo: la respuesta trae totalFilas=0 y archivoEscrito vacio."
-			},
-			"nombreSugerido": {
-				"type": "string",
-				"description": "Nombre base del archivo. Si ya existe uno con ese nombre en el dia, se le agrega _1, _2, etc. El nombre final viene en la respuesta."
-			}
-		}
-	}`))
+// reportingTool define reporting: el limite de pantalla real aparece en las
+// descripciones, y los tipos de coleccionInicial salen del registro.
+func reportingTool(limitePantalla int) mcp.Tool {
+	limite := strconv.Itoa(limitePantalla)
+	return mcp.NewTool("reporting", append(soloLectura(),
+		mcp.WithDescription("Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+limite+" filas (limite fijo del servidor, con aviso explicito si hay mas) y/o un archivo JSON con el resultado completo."),
+		mcp.WithString("coleccionInicial",
+			mcp.Required(),
+			mcp.Enum(tiposValores(false)...),
+			mcp.Description("Tipo de entidad cuya coleccion es el punto de partida del pipeline (ver 'coleccionMongo' en relacion_entre_entidades). Las tablas auxiliares habilitadas pueden usarse como destino de $lookup/$graphLookup, no como punto de partida."),
+		),
+		mcp.WithArray("pipeline",
+			mcp.Required(),
+			mcp.Items(map[string]any{"type": "object"}),
+			mcp.Description("Etapas de agregacion Mongo en orden, cada una un objeto de un solo operador (ej. {\"$match\": {...}}). Se lee como Extended JSON: admite $uuid, $binary, $date y $oid. Antes de ejecutar, el servidor valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; si no, devuelve un error que indica la etapa rechazada."),
+		),
+		mcp.WithString("modo",
+			mcp.Required(),
+			mcp.Enum("listado", "conteo"),
+			mcp.Description("'conteo': el pipeline debe terminar en $count o un $group equivalente; 0 documentos equivale a cantidad 0 y mas de un documento es un error; nunca genera archivo. 'listado': devuelve documentos, en pantalla y/o en archivo."),
+		),
+		mcp.WithBoolean("mostrarEnPantalla",
+			mcp.Description("true para devolver las filas en la respuesta: como maximo "+limite+" (limite fijo del servidor, no se puede cambiar), con aviso explicito si el total es mayor. Para el resultado completo, guardarEnArchivo."),
+		),
+		mcp.WithBoolean("guardarEnArchivo",
+			mcp.Description("true para guardar el resultado completo en un archivo JSON local, sin el limite de pantalla. Ignorado si modo=conteo. Si el pipeline no devuelve documentos, no se crea archivo: la respuesta trae totalFilas=0 y archivoEscrito vacio."),
+		),
+		mcp.WithString("nombreSugerido",
+			mcp.Description("Nombre base del archivo. Si ya existe uno con ese nombre en el dia, se le agrega _1, _2, etc. El nombre final viene en la respuesta."),
+		),
+	)...)
 }
 
 func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, destino DestinoArchivos) {
-	s.AddTool(mcp.NewToolWithRawSchema(
-		"reporting",
-		"Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+strconv.Itoa(limitePantalla)+" filas (limite fijo del servidor, con aviso explicito si hay mas) y/o un archivo JSON con el resultado completo.",
-		reportingSchema(limitePantalla),
-	), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout, destino))
+	s.AddTool(reportingTool(limitePantalla), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout, destino))
 }
 
 // reportingHandler es el handler de la tool reporting, aparte de
@@ -297,12 +258,11 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 		limitePantalla = reporting.LimitePantallaPorDefecto
 	}
 	return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		raw, err := argumentos(req)
-		if err != nil {
-			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
-		}
+		// BindArguments decodifica el texto original de los argumentos, asi
+		// que cada etapa del pipeline (json.RawMessage) conserva el orden de
+		// sus claves.
 		var args reportingArgs
-		if err := json.Unmarshal(raw, &args); err != nil {
+		if err := req.BindArguments(&args); err != nil {
 			return mcp.NewToolResultError("argumentos invalidos: " + err.Error()), nil
 		}
 		if args.ColeccionInicial == "" || len(args.Pipeline) == 0 || args.Modo == "" {
