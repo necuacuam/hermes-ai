@@ -119,3 +119,9 @@ En el lab quedó probado todo salvo la escritura: el tenant de prueba no tiene l
 ## 2026-10-16 — Línea futura: consultas mixtas y área de trabajo
 
 Decidido, sin implementar (constitución, sección 7). Para cruzar datos de bases y de APIs, cada API (creada para Hermes AI) y una función sobre la base de cada departamento dejan sus resultados en colecciones de un área de trabajo, en un Mongo propio, con nombres UUID que indica el agente; el agente cruza esas colecciones con un pipeline final validado, y las colecciones se borran solas. Surgió al pensar en un concentrador de MCP por departamento: sin un lugar donde cruzar, el agente tendría que combinar los datos en su contexto, lo que no es fiable con volúmenes grandes.
+
+## 2026-10-19 — Herramientas tipadas y prompts sin conocimiento
+
+Las herramientas se definen con los tipos de `mcp-go` (`mcp.NewTool`, `WithString`, `Enum`...) en lugar de esquemas JSON escritos a mano, y los argumentos se leen con `BindArguments`, que sigue conservando el orden de las claves del pipeline. Las anotaciones de solo lectura se declaran explícitamente: los valores por defecto de la librería marcaban las herramientas como destructivas. Los valores de `tipo` y `coleccionInicial` y las instrucciones del servidor salen del registro de entidades, sin nombrar ninguna: sumar una entidad sigue siendo tocar solo `internal/domain/entities.go`.
+
+Se sacó de los prompts el conocimiento de Hermes que se había colado (nombres de campos, la tabla auxiliar de clase de punto, ejemplos con entidades concretas). Quedan solo con comportamiento, con ejemplos genéricos; el conocimiento lo trae el agente de `relacion_entre_entidades` y `diccionario_de_campos`.
