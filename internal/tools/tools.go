@@ -27,7 +27,19 @@ import (
 )
 
 // Instrucciones es lo que el servidor le dice al cliente al conectarse.
-const Instrucciones = "Servidor MCP de entidades de Hermes (las lista relacion_entre_entidades). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo local completo."
+// Cambia segun si el guardado de archivos esta habilitado
+// (HERMES_MCP_GUARDAR_ARCHIVOS).
+func Instrucciones(guardarArchivos bool) string {
+	base := "Servidor MCP de entidades de Hermes (las lista relacion_entre_entidades). Usar diccionario_de_campos y relacion_entre_entidades para armar el pipeline de 'reporting' -- nunca inventar un campo que no este documentado ahi. modo='conteo' devuelve un numero (nunca archivo); "
+	if guardarArchivos {
+		return base + "modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto) y/o un archivo completo."
+	}
+	return base + "modo='listado' devuelve filas en pantalla (recortadas, con aviso explicito si se recorto). " + avisoSinArchivos
+}
+
+// avisoSinArchivos es lo que el agente recibe cuando el guardado de archivos
+// esta deshabilitado: en las descripciones y como error si igual lo pide.
+const avisoSinArchivos = "El guardado de archivos esta deshabilitado en este servidor: si el usuario pide el resultado completo o un archivo, informarle que esta instalacion no lo permite y ofrecerle ver en pantalla las primeras filas o el total con modo='conteo'."
 
 // DestinoArchivos guarda fuera del servidor el archivo que escribio
 // reporting (por ejemplo, en el OneDrive del usuario) y devuelve su enlace.
@@ -37,12 +49,13 @@ type DestinoArchivos interface {
 
 // RegisterAll registra las tres herramientas. limitePantalla y
 // pipelineTimeout (HERMES_MCP_LIMITE_PANTALLA y HERMES_MCP_MONGO_TIMEOUT)
-// son los dos topes de recursos de toda ejecucion de un pipeline. destino
-// puede ser nil: los archivos quedan en salidasDir.
-func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, rel dictionary.RelationsData, destino DestinoArchivos) {
+// son los dos topes de recursos de toda ejecucion de un pipeline.
+// guardarArchivos (HERMES_MCP_GUARDAR_ARCHIVOS) habilita guardarEnArchivo.
+// destino puede ser nil: los archivos quedan en salidasDir.
+func RegisterAll(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, guardarArchivos bool, rel dictionary.RelationsData, destino DestinoArchivos) {
 	registerDictionary(s, rel)
 	registerRelation(s, rel)
-	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout, destino)
+	registerReporting(s, runner, salidasDir, limitePantalla, pipelineTimeout, guardarArchivos, destino)
 }
 
 // soloLectura declara las anotaciones de una herramienta que solo lee: los
@@ -210,11 +223,18 @@ func etapasParaValidar(pipeline []json.RawMessage) ([]map[string]interface{}, er
 }
 
 // reportingTool define reporting: el limite de pantalla real aparece en las
-// descripciones, y los tipos de coleccionInicial salen del registro.
-func reportingTool(limitePantalla int) mcp.Tool {
+// descripciones, y los tipos de coleccionInicial salen del registro. Si el
+// guardado de archivos esta deshabilitado, las descripciones lo dicen.
+func reportingTool(limitePantalla int, guardarArchivos bool) mcp.Tool {
 	limite := strconv.Itoa(limitePantalla)
+	salida := "y/o un archivo JSON con el resultado completo."
+	descArchivo := "true para guardar el resultado completo en un archivo JSON local, sin el limite de pantalla. Ignorado si modo=conteo. Si el pipeline no devuelve documentos, no se crea archivo: la respuesta trae totalFilas=0 y archivoEscrito vacio."
+	if !guardarArchivos {
+		salida = "(sin archivo). " + avisoSinArchivos
+		descArchivo = "No disponible. " + avisoSinArchivos
+	}
 	return mcp.NewTool("reporting", append(soloLectura(),
-		mcp.WithDescription("Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+limite+" filas (limite fijo del servidor, con aviso explicito si hay mas) y/o un archivo JSON con el resultado completo."),
+		mcp.WithDescription("Ejecuta un pipeline de agregacion Mongo tal cual lo recibe, partiendo de la coleccion de 'coleccionInicial'. Antes de ejecutar valida que use solo etapas de consulta permitidas y colecciones del alcance o tablas auxiliares habilitadas; cada consulta tiene un tiempo maximo. modo='conteo' devuelve un numero (nunca archivo); modo='listado' devuelve en pantalla como maximo "+limite+" filas (limite fijo del servidor, con aviso explicito si hay mas) "+salida),
 		mcp.WithString("coleccionInicial",
 			mcp.Required(),
 			mcp.Enum(tiposValores(false)...),
@@ -234,7 +254,7 @@ func reportingTool(limitePantalla int) mcp.Tool {
 			mcp.Description("true para devolver las filas en la respuesta: como maximo "+limite+" (limite fijo del servidor, no se puede cambiar), con aviso explicito si el total es mayor. Para el resultado completo, guardarEnArchivo."),
 		),
 		mcp.WithBoolean("guardarEnArchivo",
-			mcp.Description("true para guardar el resultado completo en un archivo JSON local, sin el limite de pantalla. Ignorado si modo=conteo. Si el pipeline no devuelve documentos, no se crea archivo: la respuesta trae totalFilas=0 y archivoEscrito vacio."),
+			mcp.Description(descArchivo),
 		),
 		mcp.WithString("nombreSugerido",
 			mcp.Description("Nombre base del archivo. Si ya existe uno con ese nombre en el dia, se le agrega _1, _2, etc. El nombre final viene en la respuesta."),
@@ -242,18 +262,20 @@ func reportingTool(limitePantalla int) mcp.Tool {
 	)...)
 }
 
-func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, destino DestinoArchivos) {
-	s.AddTool(reportingTool(limitePantalla), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout, destino))
+func registerReporting(s *server.MCPServer, runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, guardarArchivos bool, destino DestinoArchivos) {
+	s.AddTool(reportingTool(limitePantalla, guardarArchivos), reportingHandler(runner, salidasDir, limitePantalla, pipelineTimeout, guardarArchivos, destino))
 }
 
 // reportingHandler es el handler de la tool reporting, aparte de
 // registerReporting para poder testearlo con un PipelineRunner falso.
 // limitePantalla es el maximo de filas en pantalla: lo fija la
 // configuracion (HERMES_MCP_LIMITE_PANTALLA) y ningun argumento lo cambia;
-// un "limitePantalla" que mande el agente se ignora. Si hay destino, el
-// archivo se sube ahi, se borra la copia local y el resultado trae el
-// enlace en vez de la ruta.
-func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, destino DestinoArchivos) server.ToolHandlerFunc {
+// un "limitePantalla" que mande el agente se ignora. Si guardarArchivos es
+// false, un listado con guardarEnArchivo se rechaza sin ejecutar, con un
+// mensaje para que el agente informe al usuario. Si hay destino, el archivo
+// se sube ahi, se borra la copia local y el resultado trae el enlace en vez
+// de la ruta.
+func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePantalla int, pipelineTimeout time.Duration, guardarArchivos bool, destino DestinoArchivos) server.ToolHandlerFunc {
 	if limitePantalla <= 0 {
 		limitePantalla = reporting.LimitePantallaPorDefecto
 	}
@@ -271,6 +293,9 @@ func reportingHandler(runner store.PipelineRunner, salidasDir string, limitePant
 		modo := reporting.Modo(args.Modo)
 		if modo != reporting.ModoConteo && modo != reporting.ModoListado {
 			return mcp.NewToolResultError(fmt.Sprintf("modo %q invalido -- usar \"conteo\" o \"listado\"", args.Modo)), nil
+		}
+		if modo == reporting.ModoListado && args.GuardarEnArchivo && !guardarArchivos {
+			return mcp.NewToolResultError("guardarEnArchivo no disponible. " + avisoSinArchivos), nil
 		}
 
 		if err := store.ValidarClavesUnicas(args.Pipeline); err != nil {

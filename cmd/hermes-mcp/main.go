@@ -190,15 +190,33 @@ func main() {
 		}
 	}
 
+	// Deshabilitado salvo que se pida: sin "true", reporting no genera
+	// archivos y el agente informa al usuario si los pide.
+	guardarArchivos := false
+	if raw := os.Getenv("HERMES_MCP_GUARDAR_ARCHIVOS"); raw != "" {
+		if v, err := strconv.ParseBool(raw); err == nil {
+			guardarArchivos = v
+		} else {
+			logger.Printf("HERMES_MCP_GUARDAR_ARCHIVOS=%q invalida (tiene que ser true o false) -- guardado de archivos deshabilitado", raw)
+		}
+	}
+
 	s := server.NewMCPServer("hermes-mcp", "0.3.0-pipeline",
 		server.WithToolCapabilities(false),
-		server.WithInstructions(tools.Instrucciones),
+		server.WithInstructions(tools.Instrucciones(guardarArchivos)),
 	)
 	transporte := os.Getenv("HERMES_MCP_TRANSPORTE")
-	destino := destinoOneDrive(logger, transporte)
-	tools.RegisterAll(s, ms, salidasDir, limitePantalla, timeout, rel, destino)
+	var destino tools.DestinoArchivos
+	if guardarArchivos {
+		destino = destinoOneDrive(logger, transporte)
+	}
+	tools.RegisterAll(s, ms, salidasDir, limitePantalla, timeout, guardarArchivos, rel, destino)
 
-	logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
+	if guardarArchivos {
+		logger.Printf("salidas en %s -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", salidasDir, limitePantalla, timeout)
+	} else {
+		logger.Printf("guardado de archivos deshabilitado (HERMES_MCP_GUARDAR_ARCHIVOS) -- limite de pantalla %d filas (fijo, el agente no lo cambia), timeout de consulta %s", limitePantalla, timeout)
+	}
 
 	switch transporte {
 	case "", "stdio":

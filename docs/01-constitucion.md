@@ -52,7 +52,7 @@ El MCP Server validará cada consulta antes de ejecutarla: solo aceptará etapas
 ### Resultados
 
 - Conteo, o listado en pantalla limitado a un número de filas, con aviso cuando haya más. Ese número lo fija la configuración del MCP Server; el agente no lo puede cambiar ni juntar más filas partiendo la consulta.
-- Listado completo en un archivo JSON cuando el usuario lo pida, guardado en un almacenamiento compartido con el usuario (por ejemplo, una carpeta de SharePoint) al que solo tendrán acceso el usuario y el MCP Server.
+- Listado completo en un archivo JSON cuando el usuario lo pida y la instalación lo habilite, guardado en un almacenamiento compartido con el usuario (por ejemplo, una carpeta de SharePoint) al que solo tendrán acceso el usuario y el MCP Server.
 - Sin resultados no se generará archivo, y se informará explícitamente.
 
 ### Seguridad frente a la base

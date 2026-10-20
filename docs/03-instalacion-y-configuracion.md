@@ -40,6 +40,7 @@ Una variable definida en el entorno real tiene prioridad sobre el `.env`.
 | `HERMES_MCP_MONGO_URI` | Conexión a MongoDB. | `.env` | Ninguno: **obligatoria**. Sin ella el servidor no arranca. |
 | `HERMES_MCP_MONGO_DB` | Base a usar. | `.env` | `hermes-local` |
 | `HERMES_MCP_RELACIONES_PATH` | Ruta al fichero de conocimiento. Puede ser relativa (se busca primero en el directorio de trabajo y después al lado del ejecutable) o absoluta. | `claude_desktop_config.json` | Ninguno: **obligatoria**. |
+| `HERMES_MCP_GUARDAR_ARCHIVOS` | `true` habilita `guardarEnArchivo` en `reporting`. Si no está habilitado, no se genera ningún archivo: las herramientas lo dicen y, si el usuario pide uno, el agente le informa que la instalación no lo permite y le ofrece pantalla o conteo. | `.env` | `false` |
 | `HERMES_MCP_SALIDAS_DIR` | Carpeta donde `reporting` guarda los archivos. Conviene una ruta absoluta. | `.env` | `./salidas` |
 | `HERMES_MCP_LIMITE_PANTALLA` | Máximo de filas que `reporting` devuelve al agente. El agente no lo puede cambiar. | `.env` | `10` |
 | `HERMES_MCP_MONGO_TIMEOUT` | Tiempo máximo por consulta (formato `30s`, `2m`). MongoDB también lo recibe (`maxTimeMS`). | `.env` | `30s` |
@@ -137,7 +138,7 @@ Con `HERMES_MCP_DIAGNOSTICO_AUTH=true` (activado en el lab), `hermes-mcp` regist
 
 ### Archivos en el OneDrive del usuario
 
-Con transporte HTTP y las variables `HERMES_MCP_ONEDRIVE_*`, `reporting` guarda los archivos en el OneDrive del usuario que pregunta, en la carpeta de la aplicación (`Aplicaciones/<app>/<fecha>/<nombre>.json`), y el agente recibe un enlace. La copia local se borra siempre. Sin esas variables, o en stdio (Claude Desktop), los archivos quedan en la carpeta de salidas como siempre.
+Requiere `HERMES_MCP_GUARDAR_ARCHIVOS=true`. Con transporte HTTP y las variables `HERMES_MCP_ONEDRIVE_*`, `reporting` guarda los archivos en el OneDrive del usuario que pregunta, en la carpeta de la aplicación (`Aplicaciones/<app>/<fecha>/<nombre>.json`), y el agente recibe un enlace. La copia local se borra siempre. Sin esas variables, o en stdio (Claude Desktop), los archivos quedan en la carpeta de salidas como siempre.
 
 1. En el registro de la API de `hermes-mcp`: *API permissions → Microsoft Graph → Delegated → `Files.ReadWrite.AppFolder`* (solo la carpeta de la aplicación, no el resto de los archivos) y *Grant admin consent*. Sin consentimiento previo el intercambio falla, porque en el flujo On-Behalf-Of el usuario nunca ve una pantalla para aceptarlo.
 2. Un secreto propio de ese registro (*Certificates & secrets*), distinto del de Open WebUI.

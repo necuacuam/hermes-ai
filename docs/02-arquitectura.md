@@ -179,6 +179,7 @@ Todas las barreras están en el código del MCP Server. Un prompt puede pedir lo
 
 **Ficheros,** cuando el usuario pide el resultado completo:
 
+- **Solo si la instalación lo habilita** (`HERMES_MCP_GUARDAR_ARCHIVOS=true`; por defecto, no). Si no, las herramientas lo dicen y el servidor rechaza `guardarEnArchivo` sin ejecutar la consulta; el agente informa al usuario y le ofrece pantalla o conteo.
 - **Formato JSON, siempre.** No hay CSV: un pipeline puede devolver documentos anidados y listas, y forzarlos a columnas fijas pierde datos o los deja ilegibles.
 - **Resultado completo,** sin el límite de pantalla, escrito en streaming sin cargar todo en memoria.
 - **Una carpeta por día** (con zona horaria configurable) dentro de la carpeta de salidas.

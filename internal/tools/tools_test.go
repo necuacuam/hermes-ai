@@ -82,7 +82,7 @@ func TestReporting_LimiteDePantallaFijoDelServidor(t *testing.T) {
 	}
 	for nombre, args := range casos {
 		r := &runnerFalso{total: 25}
-		texto, esError := llamar(t, reportingHandler(r, t.TempDir(), 10, time.Minute, nil), args)
+		texto, esError := llamar(t, reportingHandler(r, t.TempDir(), 10, time.Minute, true, nil), args)
 		if esError {
 			t.Fatalf("%s: error inesperado: %s", nombre, texto)
 		}
@@ -101,10 +101,10 @@ func TestReporting_LimiteDePantallaFijoDelServidor(t *testing.T) {
 
 // La descripcion que ve el agente dice el limite real y que no se cambia.
 func TestReporting_SinParametroDeLimiteEnElSchema(t *testing.T) {
-	if strings.Contains(string(esquemaDe(t, reportingTool(10))), `"limitePantalla"`) {
+	if strings.Contains(string(esquemaDe(t, reportingTool(10, true))), `"limitePantalla"`) {
 		t.Error("el schema de reporting todavia ofrece el parametro limitePantalla")
 	}
-	if !strings.Contains(string(esquemaDe(t, reportingTool(10))), "como maximo 10") {
+	if !strings.Contains(string(esquemaDe(t, reportingTool(10, true))), "como maximo 10") {
 		t.Error("el schema no informa el limite fijo de 10 filas")
 	}
 }
@@ -146,7 +146,7 @@ func TestSchemasTiposDesdeRegistro(t *testing.T) {
 		esperado = append(esperado, string(tp))
 	}
 
-	rep := enumDe(t, esquemaDe(t, reportingTool(10)), "coleccionInicial")
+	rep := enumDe(t, esquemaDe(t, reportingTool(10, true)), "coleccionInicial")
 	if strings.Join(rep, ",") != strings.Join(esperado, ",") {
 		t.Errorf("enum de coleccionInicial = %v, esperado %v", rep, esperado)
 	}
@@ -161,8 +161,8 @@ func TestSchemasTiposDesdeRegistro(t *testing.T) {
 // pipeline con el orden de claves tal como lo escribio el agente.
 func TestProtocolo_HerramientasYOrdenDeClaves(t *testing.T) {
 	r := &runnerFalso{total: 3}
-	s := server.NewMCPServer("prueba", "0", server.WithToolCapabilities(false), server.WithInstructions(Instrucciones))
-	RegisterAll(s, r, t.TempDir(), 10, time.Minute, dictionary.RelationsData{}, nil)
+	s := server.NewMCPServer("prueba", "0", server.WithToolCapabilities(false), server.WithInstructions(Instrucciones(true)))
+	RegisterAll(s, r, t.TempDir(), 10, time.Minute, true, dictionary.RelationsData{}, nil)
 
 	entradaR, entradaW := io.Pipe()
 	salidaR, salidaW := io.Pipe()
@@ -206,7 +206,7 @@ func TestProtocolo_HerramientasYOrdenDeClaves(t *testing.T) {
 	_ = entradaW.Close()
 
 	ini, _ := resp[1]["result"].(map[string]interface{})
-	if instr, _ := ini["instructions"].(string); instr != Instrucciones {
+	if instr, _ := ini["instructions"].(string); instr != Instrucciones(true) {
 		t.Errorf("initialize no trae las instrucciones: %v", resp[1])
 	}
 	lista, _ := resp[2]["result"].(map[string]interface{})
@@ -246,7 +246,7 @@ func TestReporting_ArchivoAlDestino(t *testing.T) {
 	for _, falla := range []bool{false, true} {
 		dir := t.TempDir()
 		d := &destinoFalso{falla: falla}
-		texto, esError := llamar(t, reportingHandler(&runnerFalso{total: 3}, dir, 10, time.Minute, d), args)
+		texto, esError := llamar(t, reportingHandler(&runnerFalso{total: 3}, dir, 10, time.Minute, true, d), args)
 
 		if !d.existia || d.nombre != "clases.json" || len(d.carpeta) != len("2006-01-02") {
 			t.Errorf("falla=%v: el destino recibio carpeta=%q nombre=%q existia=%v", falla, d.carpeta, d.nombre, d.existia)
@@ -281,10 +281,52 @@ func esquemaDe(t *testing.T, tool mcp.Tool) json.RawMessage {
 // Las tres herramientas solo leen, y lo tienen que declarar: los valores por
 // defecto de la libreria las marcarian como destructivas.
 func TestHerramientasDeclaradasDeSoloLectura(t *testing.T) {
-	for _, tool := range []mcp.Tool{dictionaryTool(), reportingTool(10)} {
+	for _, tool := range []mcp.Tool{dictionaryTool(), reportingTool(10, true)} {
 		a := tool.Annotations
 		if a.ReadOnlyHint == nil || !*a.ReadOnlyHint || a.DestructiveHint == nil || *a.DestructiveHint {
 			t.Errorf("%s: anotaciones incorrectas: %+v", tool.Name, a)
 		}
+	}
+}
+
+// Con el guardado de archivos deshabilitado, un listado con
+// guardarEnArchivo no se ejecuta ni deja archivo: devuelve un error que el
+// agente transmite al usuario. Pantalla y conteo siguen funcionando.
+func TestReporting_GuardadoDeshabilitado(t *testing.T) {
+	dir := t.TempDir()
+	r := &runnerFalso{total: 3}
+	h := reportingHandler(r, dir, 10, time.Minute, false, nil)
+
+	texto, esError := llamar(t, h, `{"coleccionInicial":"punto","modo":"listado","mostrarEnPantalla":true,"guardarEnArchivo":true,"pipeline":[{"$match":{}}]}`)
+	if !esError || !strings.Contains(texto, "deshabilitado") {
+		t.Errorf("se esperaba el error de guardado deshabilitado, llego (error=%v): %s", esError, texto)
+	}
+	if r.ultimo != nil {
+		t.Error("el pipeline se ejecuto aunque el guardado esta deshabilitado")
+	}
+	if entradas, _ := os.ReadDir(dir); len(entradas) > 0 {
+		t.Errorf("se escribio algo en la carpeta de salidas: %v", entradas)
+	}
+
+	if texto, esError := llamar(t, h, `{"coleccionInicial":"punto","modo":"listado","mostrarEnPantalla":true,"pipeline":[{"$match":{}}]}`); esError {
+		t.Errorf("pantalla: error inesperado: %s", texto)
+	}
+	conteo := reportingHandler(&runnerFalso{total: 1}, dir, 10, time.Minute, false, nil)
+	if texto, esError := llamar(t, conteo, `{"coleccionInicial":"punto","modo":"conteo","guardarEnArchivo":true,"pipeline":[{"$count":"n"}]}`); esError {
+		t.Errorf("conteo: error inesperado: %s", texto)
+	}
+}
+
+// Deshabilitado, la descripcion de reporting y las instrucciones lo dicen,
+// para que el agente avise sin intentarlo.
+func TestReporting_DescripcionSinArchivos(t *testing.T) {
+	if !strings.Contains(string(esquemaDe(t, reportingTool(10, false))), "deshabilitado") {
+		t.Error("la descripcion de reporting no avisa que el guardado esta deshabilitado")
+	}
+	if strings.Contains(string(esquemaDe(t, reportingTool(10, true))), "deshabilitado") {
+		t.Error("con el guardado habilitado, la descripcion no deberia decir que esta deshabilitado")
+	}
+	if !strings.Contains(Instrucciones(false), "deshabilitado") || strings.Contains(Instrucciones(true), "deshabilitado") {
+		t.Error("las instrucciones no reflejan si el guardado esta habilitado")
 	}
 }
